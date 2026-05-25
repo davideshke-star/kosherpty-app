@@ -2,91 +2,60 @@ import { useState, useEffect } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import LoginPage from "./LoginPage";
-import AdminApp from "./AdminApp";
-import SupervisorApp from "./SupervisorApp";
+import Login from "./Login";
+import Admin from "./Admin";
+import Supervisor from "./Supervisor";
 
-// ─── ADMIN EMAIL — cámbialo al tuyo ───────────────────────────────────────────
 export const ADMIN_EMAIL = "davideshke@gmail.com";
+export const APP_NAME = "Kosher Shevet Ahim";
+export const APP_SUB  = "Gestión de Rutas";
+
+const C = {
+  bg: "#F7F8FA", surface: "#FFFFFF", border: "#E8ECF0",
+  primary: "#2563EB", text: "#0F172A", muted: "#64748B"
+};
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [role, setRole] = useState(null); // "admin" | "supervisor" | "pending"
+  const [user, setUser]     = useState(null);
+  const [role, setRole]     = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
+    return onAuthStateChanged(auth, async u => {
       if (!u) { setUser(null); setRole(null); setLoading(false); return; }
       setUser(u);
-
-      // Admin check por email
-      if (u.email === ADMIN_EMAIL) {
-        setRole("admin");
-        setLoading(false);
-        return;
-      }
-
-      // Buscar rol en Firestore
+      if (u.email === ADMIN_EMAIL) { setRole("admin"); setLoading(false); return; }
       const ref = doc(db, "users", u.uid);
       const snap = await getDoc(ref);
       if (snap.exists()) {
         setRole(snap.data().role || "pending");
       } else {
-        // Primer login: guardar usuario como pendiente
-        await setDoc(ref, {
-          uid: u.uid,
-          email: u.email,
-          name: u.displayName || u.email,
-          photo: u.photoURL || "",
-          role: "pending",
-          createdAt: new Date().toISOString(),
-        });
+        await setDoc(ref, { uid: u.uid, email: u.email, name: u.displayName || u.email, photo: u.photoURL || "", role: "pending", createdAt: new Date().toISOString() });
         setRole("pending");
       }
       setLoading(false);
     });
-    return () => unsub();
   }, []);
 
-  if (loading) return <Loader />;
-  if (!user) return <LoginPage />;
-  if (role === "admin") return <AdminApp user={user} />;
-  if (role === "supervisor") return <SupervisorApp user={user} />;
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"Inter,sans-serif" }}>
+      <div style={{ width:40, height:40, border:`3px solid ${C.border}`, borderTop:`3px solid ${C.primary}`, borderRadius:"50%", animation:"spin 1s linear infinite" }}/>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
 
-  // Pendiente de aprobación
+  if (!user) return <Login />;
+  if (role === "admin") return <Admin user={user} />;
+  if (role === "supervisor") return <Supervisor user={user} />;
+
   return (
-    <div style={styles.center}>
-      <div style={styles.card}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>⏳</div>
-        <div style={{ fontSize: 20, fontWeight: 700, color: "#f8fafc", marginBottom: 8 }}>
-          Cuenta pendiente
-        </div>
-        <div style={{ fontSize: 14, color: "#94a3b8", textAlign: "center", marginBottom: 20 }}>
-          Tu cuenta ({user.email}) está esperando ser aprobada por el administrador.
-        </div>
-        <button onClick={() => auth.signOut()}
-          style={{ ...styles.btn, background: "#334155", color: "#94a3b8" }}>
-          Cerrar sesión
-        </button>
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"Inter,sans-serif", padding:24 }}>
+      <div style={{ background:C.surface, borderRadius:16, padding:40, maxWidth:380, width:"100%", border:`1px solid ${C.border}`, textAlign:"center", boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
+        <div style={{ fontSize:40, marginBottom:16 }}>⏳</div>
+        <div style={{ fontSize:20, fontWeight:700, color:C.text, marginBottom:8 }}>Cuenta pendiente</div>
+        <div style={{ fontSize:14, color:C.muted, marginBottom:24, lineHeight:1.6 }}>Tu cuenta está esperando aprobación del administrador.</div>
+        <button onClick={() => auth.signOut()} style={{ background:C.primary, color:"#fff", border:"none", borderRadius:10, padding:"11px 24px", fontWeight:600, cursor:"pointer", fontSize:14 }}>Cerrar sesión</button>
       </div>
     </div>
   );
 }
-
-function Loader() {
-  return (
-    <div style={styles.center}>
-      <div style={{ fontSize: 40 }}>📍</div>
-      <div style={{ color: "#64748b", marginTop: 12, fontSize: 14 }}>Cargando...</div>
-    </div>
-  );
-}
-
-const styles = {
-  center: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-    minHeight: "100vh", background: "#0f172a", fontFamily: "'DM Sans','Segoe UI',sans-serif" },
-  card: { background: "#1e293b", borderRadius: 16, padding: 32, maxWidth: 360, width: "90%",
-    border: "1px solid #334155", display: "flex", flexDirection: "column", alignItems: "center" },
-  btn: { padding: "10px 24px", borderRadius: 10, border: "none", cursor: "pointer",
-    fontSize: 14, fontWeight: 700 },
-};
