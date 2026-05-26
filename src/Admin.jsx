@@ -81,8 +81,6 @@ export default function Admin({ user }) {
   const [selectedSup, setSelectedSup] = useState(null);
   const [modal, setModal]             = useState(null);
   const [form, setForm]               = useState({});
-  const [aiResult, setAiResult]       = useState(null);
-  const [aiLoading, setAiLoading]     = useState(false);
 
   useEffect(() => {
     const u1=onSnapshot(collection(db,"supervisors"),snap=>setSupervisors(snap.docs.map(d=>({id:d.id,...d.data()}))));
@@ -136,26 +134,6 @@ export default function Admin({ user }) {
   function openModal(type,data={}){setModal(type);setForm(data);}
   function closeModal(){setModal(null);setForm({});}
 
-  async function runAI() {
-    setAiLoading(true); setAiResult(null);
-    const reportText = buildReport(supervisors, routes);
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514", max_tokens:1200,
-          messages:[{ role:"user", content:`Eres experto en supervisión kosher. Analiza este reporte semanal en español. Estructura tu respuesta con tres secciones claras: PUNTOS FUERTES, PUNTOS DÉBILES, y RECOMENDACIONES. Sé específico con nombres de establecimientos y supervisores.\n\n${reportText}` }]
-        })
-      });
-      const data = await res.json();
-      setAiResult(data.content?.map(i=>i.text||"").join("")||"Sin respuesta.");
-    } catch(e) {
-      setAiResult("Error: " + e.message);
-    }
-    setAiLoading(false);
-  }
-
   const sup = selectedSup ? supervisors.find(s=>s.id===selectedSup) : null;
   const allStops = Object.values(routes).flat();
   const pendingSugg = suggestions.filter(s=>s.status==="pending");
@@ -168,7 +146,6 @@ export default function Admin({ user }) {
     {id:"settings", icon:"⚙️",label:"Settings"},
     {id:"users",    icon:"👥",label:"Usuarios",badge:pendingUsers.length+pendingSugg.length},
     {id:"history",  icon:"📋",label:"Historial"},
-    {id:"ai",       icon:"🤖",label:"AI"},
     {id:"exports",  icon:"📤",label:"Exportar"},
   ];
 
@@ -180,7 +157,7 @@ export default function Admin({ user }) {
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           {selectedSup && navTab==="dashboard" &&
             <button onClick={()=>setSelectedSup(null)} style={{ ...btn({ background:C.bg, color:C.muted, padding:"6px 10px", fontSize:13, border:`1px solid ${C.border}`, marginRight:4 }) }}>←</button>}
-          <div style={{ width:30, height:30, background:C.primary, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>📍</div>
+          <div style={{ width:30, height:30, background:C.primary, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><svg width="16" height="16" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="11" r="5" fill="white" opacity="0.95"/><path d="M14 27 C14 27 4 18 4 11 C4 5.477 8.477 1 14 1 C19.523 1 24 5.477 24 11 C24 18 14 27 14 27Z" stroke="white" strokeWidth="2.2" fill="none" opacity="0.7"/></svg></div>
           <div>
             <div style={{ fontSize:10, fontWeight:700, color:C.primary, textTransform:"uppercase", letterSpacing:1.2 }}>{APP_NAME}</div>
             <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{APP_SUB}</div>
@@ -416,23 +393,6 @@ export default function Admin({ user }) {
           </>
         )}
 
-        {/* AI */}
-        {navTab==="ai"&&(
-          <>
-            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>Análisis AI</div>
-            <div style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.5 }}>Genera un análisis inteligente de la semana con puntos fuertes, débiles y recomendaciones.</div>
-            <button onClick={runAI} disabled={aiLoading}
-              style={{ ...btn({ width:"100%", padding:"14px", fontSize:15, background:aiLoading?"#D1D5DB":C.primary, color:"#fff", marginBottom:16 }) }}>
-              {aiLoading?"Analizando... ⏳":"✨ Generar análisis semanal"}
-            </button>
-            {aiResult&&(
-              <div style={{ background:C.surface, borderRadius:16, padding:20, boxShadow:C.shadow }}>
-                <div style={{ fontSize:11, fontWeight:700, color:C.primary, textTransform:"uppercase", letterSpacing:1, marginBottom:12 }}>Resultado</div>
-                <div style={{ fontSize:13, color:C.text, lineHeight:1.8, whiteSpace:"pre-wrap" }}>{aiResult}</div>
-              </div>
-            )}
-          </>
-        )}
 
         {/* EXPORTAR */}
         {navTab==="exports"&&(
