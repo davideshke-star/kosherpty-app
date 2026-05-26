@@ -1,19 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { signOut } from "firebase/auth";
-import { doc, getDoc, collection, onSnapshot, updateDoc, addDoc, query, orderBy } from "firebase/firestore";
+import { doc, getDoc, collection, onSnapshot, updateDoc, addDoc, query, orderBy, writeBatch } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import { C, STATUS, btn, nowStr, todayName, weekRange } from "./constants";
 import { LogoIcon, LogoText } from "./Logo";
 import ChecklistModal from "./ChecklistModal";
 
-// ── Small helpers ──────────────────────────────────────────────────────────────
 function Badge({ status }) {
   const st = STATUS[status] || STATUS.pending;
-  return (
-    <span style={{ fontSize:11, fontWeight:600, color:st.color, background:st.color+"18", borderRadius:6, padding:"3px 10px", whiteSpace:"nowrap" }}>
-      {st.label}
-    </span>
-  );
+  return <span style={{ fontSize:11, fontWeight:600, color:st.color, background:st.color+"18", borderRadius:6, padding:"3px 10px", whiteSpace:"nowrap" }}>{st.label}</span>;
 }
 
 function Ring({ pct, color, size=44 }) {
@@ -29,61 +24,143 @@ function Ring({ pct, color, size=44 }) {
   );
 }
 
-// ── Photo uploader (outside checklist) ────────────────────────────────────────
-function PhotoUploader({ photos, onChange }) {
-  const fileRef = useRef();
-  const [loading, setLoading] = useState(false);
+// ── Drag-to-reorder list for pending stops ────────────────────────────────────
+function ReorderableList({ stops, onReorder, onMarkToday }) {
+  const [dragIdx, setDragIdx]   = useState(null);
+  const [overIdx, setOverIdx]   = useState(null);
+  const [items, setItems]       = useState(stops);
+  const [saving, setSaving]     = useState(false);
 
-  function handleFiles(e) {
-    const files = Array.from(e.target.files);
-    if (!files.length) return;
-    setLoading(true);
-    Promise.all(files.map(f => new Promise(res => {
-      const r = new FileReader();
-      r.onload = ev => res({ url: ev.target.result, name: f.name, time: nowStr() });
-      r.readAsDataURL(f);
-    }))).then(newPhotos => {
-      onChange([...photos, ...newPhotos]);
-      setLoading(false);
+  // Sync external stops into local state
+  useEffect(() => { setItems(stops); }, [stops]);
+
+  // Touch drag state
+  const touchStart = useRef(null);
+  const touchItem  = useRef(null);
+
+  function handleDragStart(e, idx) {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = "move";
+  }
+  function handleDragOver(e, idx) {
+    e.preventDefault();
+    setOverIdx(idx);
+  }
+  function handleDrop(e, idx) {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === idx) { setDragIdx(null); setOverIdx(null); return; }
+    const reordered = [...items];
+    const [moved] = reordered.splice(dragIdx, 1);
+    reordered.splice(idx, 0, moved);
+    setItems(reordered);
+    setDragIdx(null); setOverIdx(null);
+    saveOrder(reordered);
+  }
+  function handleDragEnd() { setDragIdx(null); setOverIdx(null); }
+
+  // Touch handlers for mobile
+  function handleTouchStart(e, idx) {
+    touchItem.current = idx;
+    touchStart.current = { y: e.touches[0].clientY, idx };
+  }
+  function handleTouchMove(e) {
+    if (touchItem.current === null) return;
+    e.preventDefault();
+    const y = e.touches[0].clientY;
+    const elements = document.querySelectorAll("[data-stop-item]");
+    let newOver = touchItem.current;
+    elements.forEach((el, i) => {
+      const rect = el.getBoundingClientRect();
+      if (y >= rect.top && y <= rect.bottom) newOver = i;
     });
-    e.target.value = "";
+    setOverIdx(newOver);
+  }
+  function handleTouchEnd() {
+    if (touchItem.current === null || overIdx === null || touchItem.current === overIdx) {
+      touchItem.current = null; setOverIdx(null); return;
+    }
+    const reordered = [...items];
+    const [moved] = reordered.splice(touchItem.current, 1);
+    reordered.splice(overIdx, 0, moved);
+    setItems(reordered);
+    touchItem.current = null; setOverIdx(null);
+    saveOrder(reordered);
+  }
+
+  async function saveOrder(ordered) {
+    setSaving(true);
+    await onReorder(ordered);
+    setSaving(false);
   }
 
   return (
-    <div style={{ marginTop:10 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
-        <div style={{ fontSize:12, fontWeight:600, color:C.muted }}>Fotos de la visita</div>
-        <button onClick={() => fileRef.current?.click()} disabled={loading}
-          style={{ ...btn({ background:loading?"#E5E7EB":C.primaryLight, color:loading?C.muted:C.primary, padding:"5px 12px", fontSize:12 }) }}>
-          {loading ? "Cargando..." : "📷 Agregar foto"}
-        </button>
-        <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" onChange={handleFiles} style={{ display:"none" }}/>
-      </div>
-      {photos.length > 0 && (
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-          {photos.map((p, i) => (
-            <div key={i} style={{ position:"relative" }}>
-              <img src={p.url} alt="" style={{ width:56, height:56, objectFit:"cover", borderRadius:9, border:`1px solid ${C.border}` }}/>
-              <button onClick={() => onChange(photos.filter((_,j)=>j!==i))}
-                style={{ position:"absolute", top:-5, right:-5, width:18, height:18, borderRadius:"50%", background:"#DC2626", border:"none", color:"#fff", fontSize:11, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, fontWeight:700 }}>×</button>
-            </div>
-          ))}
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+        <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1 }}>
+          Pendientes esta semana ({items.length})
         </div>
-      )}
+        {saving && <div style={{ fontSize:11, color:C.primary }}>Guardando...</div>}
+        <div style={{ fontSize:11, color:C.subtle }}>Mantén ☰ para reordenar</div>
+      </div>
+
+      {items.map((stop, i) => (
+        <div
+          key={stop.id}
+          data-stop-item
+          draggable
+          onDragStart={e => handleDragStart(e, i)}
+          onDragOver={e => handleDragOver(e, i)}
+          onDrop={e => handleDrop(e, i)}
+          onDragEnd={handleDragEnd}
+          onTouchStart={e => handleTouchStart(e, i)}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          style={{
+            background: overIdx === i && dragIdx !== i ? C.primaryLight : "#fff",
+            borderRadius:12, padding:"11px 12px", marginBottom:6,
+            border:`1.5px solid ${overIdx===i&&dragIdx!==i?C.primary:"#E4E9F0"}`,
+            display:"flex", alignItems:"center", gap:10,
+            boxShadow: dragIdx===i ? "0 8px 24px rgba(0,0,0,.12)" : "0 1px 2px rgba(0,0,0,.04)",
+            opacity: dragIdx===i ? 0.5 : 1,
+            transition:"all .15s", cursor:"default", userSelect:"none"
+          }}>
+          {/* Drag handle */}
+          <div
+            style={{ display:"flex", flexDirection:"column", gap:3, padding:"4px 6px", cursor:"grab", flexShrink:0 }}
+            title="Arrastra para reordenar">
+            {[0,1,2].map(l => (
+              <div key={l} style={{ width:16, height:2, background:"#D1D5DB", borderRadius:99 }}/>
+            ))}
+          </div>
+
+          {/* Order number */}
+          <div style={{ width:22, height:22, borderRadius:"50%", background:C.primaryLight, color:C.primary, fontSize:11, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+            {i+1}
+          </div>
+
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontWeight:600, color:C.text, fontSize:13, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{stop.place}</div>
+            <div style={{ fontSize:11, color:C.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{stop.address}</div>
+          </div>
+
+          <button onClick={() => onMarkToday(stop.id)}
+            style={{ ...btn({ background:C.primaryLight, color:C.primary, padding:"7px 14px", fontSize:13, flexShrink:0 }) }}>
+            + Hoy
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function Supervisor({ user }) {
-  const [supData, setSupData]         = useState(null);
-  const [stops, setStops]             = useState([]);
-  const [loading, setLoading]         = useState(true);
-  const [navTab, setNavTab]           = useState("route");
-  const [checklistModal, setChecklistModal] = useState(null); // {stopId, visitIdx, mode}
-  // Per-stop photos state (managed outside checklist)
-  const [stopPhotos, setStopPhotos]   = useState({}); // { "stopId-visitIdx": [photos] }
-  const [form, setForm]               = useState({});
+  const [supData, setSupData]           = useState(null);
+  const [stops, setStops]               = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [navTab, setNavTab]             = useState("route");
+  const [checklistModal, setChecklistModal] = useState(null);
+  const [form, setForm]                 = useState({});
   const [confirmModal, setConfirmModal] = useState(null);
   const today = todayName();
 
@@ -104,7 +181,6 @@ export default function Supervisor({ user }) {
     return () => unsub();
   }, [user.uid]);
 
-  // ── Firestore helpers ──────────────────────────────────────────────────────
   async function updateStop(stopId, data) {
     await updateDoc(doc(db, "supervisors", supData.id, "stops", stopId), data);
   }
@@ -116,17 +192,14 @@ export default function Supervisor({ user }) {
     });
   }
 
-  // ── Actions ────────────────────────────────────────────────────────────────
-
   async function markToday(stopId) {
     await updateStop(stopId, {
       status:"today", scheduledDay:today,
-      visits:[{ idx:0, status:"today", scheduledDay:today, checkIn:null, checkOut:null, checklist:null, generalNotes:"", photos:[], checkInEdited:false, checkOutEdited:false }]
+      visits:[{ idx:0, status:"today", scheduledDay:today, checkIn:null, checkOut:null, checklist:null, generalNotes:"", checkInEdited:false, checkOutEdited:false }]
     });
   }
 
   async function startVisit(stopId, visitIdx) {
-    // Record checkIn time right now — this is the authoritative entry time
     const entryTime = nowStr();
     const stop = stops.find(s => s.id === stopId);
     const visits = [...(stop.visits||[])];
@@ -143,7 +216,6 @@ export default function Supervisor({ user }) {
     setConfirmModal(null);
   }
 
-  // Reset closed visit back to "today" so supervisor can start fresh from Iniciar
   async function resetVisit(stopId, visitIdx) {
     const stop = stops.find(s => s.id === stopId);
     const visits = [...(stop.visits||[])];
@@ -151,50 +223,35 @@ export default function Supervisor({ user }) {
     await updateStop(stopId, { status:"today", visits });
   }
 
-  // Complete visit: save checklist data. checkIn comes from the visit record (set at Iniciar), NOT from modal.
   async function completeVisit(stopId, visitIdx, checklistData) {
     const stop = stops.find(s => s.id === stopId);
     const visits = [...(stop.visits||[])];
-    const photoKey = `${stopId}-${visitIdx}`;
-    const photos = stopPhotos[photoKey] || [];
     const hasIssue = checklistData.checklist.some(c => c.result === "issue");
-
     visits[visitIdx] = {
       ...visits[visitIdx],
-      status:      "done",
-      // checkIn NEVER changes here — it was recorded at startVisit
-      checkIn:     visits[visitIdx].checkIn,
-      checkOut:    checklistData.checkOut, // now() from modal
-      checklist:   checklistData.checklist,
-      generalNotes:checklistData.generalNotes,
-      photos:      photos,
+      status:       "done",
+      checkIn:      visits[visitIdx].checkIn, // NEVER overwrite
+      checkOut:     checklistData.checkOut,
+      checklist:    checklistData.checklist,
+      generalNotes: checklistData.generalNotes,
       checkInEdited:  false,
       checkOutEdited: false,
     };
-
     await updateStop(stopId, { status:"done", visits });
     await log(stop.place, hasIssue ? "Completado con observaciones" : "Completado");
-    // Clear local photos for this visit
-    setStopPhotos(prev => { const n={...prev}; delete n[photoKey]; return n; });
     setChecklistModal(null);
   }
 
-  // Edit existing visit
   async function editVisit(stopId, visitIdx, checklistData) {
     const stop = stops.find(s => s.id === stopId);
     const visits = [...(stop.visits||[])];
-    const photoKey = `${stopId}-${visitIdx}`;
-    // Photos: use local state if changed, otherwise keep existing
-    const photos = stopPhotos[photoKey] !== undefined ? stopPhotos[photoKey] : (visits[visitIdx].photos||[]);
-
     visits[visitIdx] = {
       ...visits[visitIdx],
-      status:         "done", // editing always results in done, not closed
+      status:         "done",
       checkIn:        checklistData.checkIn,
       checkOut:       checklistData.checkOut,
       checklist:      checklistData.checklist,
       generalNotes:   checklistData.generalNotes,
-      photos:         photos,
       checkInEdited:  checklistData.checkInEdited,
       checkOutEdited: checklistData.checkOutEdited,
       edited:         true,
@@ -209,16 +266,17 @@ export default function Supervisor({ user }) {
     const visits = stop.visits||[];
     await updateStop(stopId, {
       status:"today",
-      visits:[...visits, { idx:visits.length, status:"today", scheduledDay:today, checkIn:null, checkOut:null, checklist:null, generalNotes:"", photos:[], checkInEdited:false, checkOutEdited:false }]
+      visits:[...visits, { idx:visits.length, status:"today", scheduledDay:today, checkIn:null, checkOut:null, checklist:null, generalNotes:"", checkInEdited:false, checkOutEdited:false }]
     });
   }
 
-  async function reorderStop(stopId, idx, dir) {
-    const sorted = [...stops].sort((a,b)=>(a.order||0)-(b.order||0));
-    const to = idx + dir;
-    if (to < 0 || to >= sorted.length) return;
-    await updateDoc(doc(db,"supervisors",supData.id,"stops",sorted[idx].id),{order:to});
-    await updateDoc(doc(db,"supervisors",supData.id,"stops",sorted[to].id),{order:idx});
+  // Batch reorder — saves all in one go
+  async function handleReorder(orderedStops) {
+    const batch = writeBatch(db);
+    orderedStops.forEach((stop, i) => {
+      batch.update(doc(db, "supervisors", supData.id, "stops", stop.id), { order: i });
+    });
+    await batch.commit();
   }
 
   async function sendSuggestion() {
@@ -232,7 +290,6 @@ export default function Supervisor({ user }) {
     alert("¡Sugerencia enviada!");
   }
 
-  // ── Derived state ──────────────────────────────────────────────────────────
   const todayStops   = stops.filter(s => ["today","in-progress","done","closed"].includes(s.status));
   const pendingStops = stops.filter(s => s.status === "pending");
   const doneCount    = stops.filter(s => ["done","closed"].includes(s.status)).length;
@@ -255,7 +312,6 @@ export default function Supervisor({ user }) {
     </div>
   );
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{ fontFamily:"'DM Sans',sans-serif", background:"#F4F6F9", minHeight:"100vh" }}>
 
@@ -298,9 +354,6 @@ export default function Supervisor({ user }) {
                     const isInProgress = visit.status === "in-progress";
                     const isToday      = visit.status === "today";
                     const isFinished   = isDone || isClosed;
-                    const photoKey     = `${stop.id}-${vi}`;
-                    const localPhotos  = stopPhotos[photoKey];
-                    const displayPhotos = localPhotos !== undefined ? localPhotos : (visit.photos||[]);
 
                     return (
                       <div key={`${stop.id}-${vi}`} style={{
@@ -308,72 +361,39 @@ export default function Supervisor({ user }) {
                         border:`1.5px solid ${isInProgress?"#FDE68A":isClosed?"#FCA5A5":isDone?"#6EE7B7":"#E4E9F0"}`,
                         boxShadow: isInProgress ? "0 0 0 3px #FFFBEB" : "0 1px 3px rgba(0,0,0,.05)"
                       }}>
-                        {/* Stop title */}
                         <div style={{ display:"flex", alignItems:"flex-start", gap:8, marginBottom:8 }}>
                           <div style={{ flex:1 }}>
-                            <div style={{ fontWeight:700, color:C.text, fontSize:15, lineHeight:1.3 }}>{stop.place}</div>
+                            <div style={{ fontWeight:700, color:C.text, fontSize:15 }}>{stop.place}</div>
                             <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{stop.address}</div>
                           </div>
                           {visits.length > 1 && (
-                            <span style={{ fontSize:10, color:C.primary, fontWeight:700, background:C.primaryLight, borderRadius:6, padding:"2px 8px", whiteSpace:"nowrap", marginTop:2 }}>
-                              Visita #{vi+1}
-                            </span>
+                            <span style={{ fontSize:10, color:C.primary, fontWeight:700, background:C.primaryLight, borderRadius:6, padding:"2px 8px", whiteSpace:"nowrap", marginTop:2 }}>Visita #{vi+1}</span>
                           )}
                           <Badge status={visit.status}/>
                         </div>
 
-                        {/* Times */}
                         {(visit.checkIn || visit.checkOut) && (
-                          <div style={{ fontSize:11, color:C.subtle, marginBottom:7, display:"flex", gap:8, flexWrap:"wrap" }}>
-                            {visit.checkIn && (
-                              <span>Entrada: <strong>{visit.checkIn}</strong>{visit.checkInEdited && <span style={{ color:"#D97706" }}> ⚠️</span>}</span>
-                            )}
-                            {visit.checkOut && (
-                              <span>Salida: <strong>{visit.checkOut}</strong>{visit.checkOutEdited && <span style={{ color:"#D97706" }}> ⚠️</span>}</span>
-                            )}
+                          <div style={{ fontSize:11, color:C.subtle, marginBottom:7 }}>
+                            {visit.checkIn && <span>Entrada: <strong>{visit.checkIn}</strong>{visit.checkInEdited&&<span style={{ color:"#D97706" }}> ⚠️</span>} </span>}
+                            {visit.checkOut && <span>Salida: <strong>{visit.checkOut}</strong>{visit.checkOutEdited&&<span style={{ color:"#D97706" }}> ⚠️</span>}</span>}
                           </div>
                         )}
 
-                        {/* Checklist summary */}
                         {visit.checklist && (
-                          <div style={{ display:"flex", gap:8, marginBottom:7, flexWrap:"wrap" }}>
-                            <span style={{ fontSize:11, color:"#059669", fontWeight:600, background:"#ECFDF5", borderRadius:6, padding:"2px 8px" }}>
-                              ✅ {visit.checklist.filter(c=>c.result==="ok").length} OK
-                            </span>
+                          <div style={{ display:"flex", gap:6, marginBottom:7, flexWrap:"wrap" }}>
+                            <span style={{ fontSize:11, color:"#059669", fontWeight:600, background:"#ECFDF5", borderRadius:6, padding:"2px 8px" }}>✅ {visit.checklist.filter(c=>c.result==="ok").length} OK</span>
                             {visit.checklist.filter(c=>c.result==="issue").length > 0 && (
-                              <span style={{ fontSize:11, color:"#DC2626", fontWeight:600, background:"#FEF2F2", borderRadius:6, padding:"2px 8px" }}>
-                                ❌ {visit.checklist.filter(c=>c.result==="issue").length} problema
-                              </span>
+                              <span style={{ fontSize:11, color:"#DC2626", fontWeight:600, background:"#FEF2F2", borderRadius:6, padding:"2px 8px" }}>❌ {visit.checklist.filter(c=>c.result==="issue").length} problema</span>
                             )}
                           </div>
                         )}
 
-                        {/* Notes */}
                         {visit.generalNotes && (
-                          <div style={{ fontSize:12, color:C.muted, background:"#F8FAFC", borderRadius:8, padding:"6px 10px", marginBottom:7, lineHeight:1.5 }}>
-                            📝 {visit.generalNotes}
-                          </div>
+                          <div style={{ fontSize:12, color:C.muted, background:"#F8FAFC", borderRadius:8, padding:"6px 10px", marginBottom:7, lineHeight:1.5 }}>📝 {visit.generalNotes}</div>
                         )}
 
-                        {/* Photos */}
-                        {displayPhotos.length > 0 && (
-                          <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:8 }}>
-                            {displayPhotos.map((p, pi) => (
-                              <img key={pi} src={p.url} alt="" style={{ width:52, height:52, objectFit:"cover", borderRadius:8, border:"1px solid #E4E9F0" }}/>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* In-progress: photo uploader outside checklist */}
-                        {isInProgress && (
-                          <PhotoUploader
-                            photos={localPhotos || []}
-                            onChange={newPhotos => setStopPhotos(prev => ({...prev, [photoKey]: newPhotos}))}
-                          />
-                        )}
-
-                        {/* Action buttons */}
-                        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:10 }}>
+                        {/* Actions */}
+                        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
                           {isToday && (
                             <button onClick={() => startVisit(stop.id, vi)}
                               style={{ ...btn({ background:C.primary, color:"#fff", padding:"9px 20px", fontSize:14, boxShadow:`0 2px 8px ${C.primary}44` }) }}>
@@ -382,7 +402,7 @@ export default function Supervisor({ user }) {
                           )}
                           {isInProgress && (
                             <>
-                              <button onClick={() => { setConfirmModal({ stopId:stop.id, visitIdx:vi }); }}
+                              <button onClick={() => setConfirmModal({ stopId:stop.id, visitIdx:vi })}
                                 style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"9px 14px", fontSize:13, border:"1px solid #FCA5A5" }) }}>
                                 🔒 Cerrado
                               </button>
@@ -394,16 +414,9 @@ export default function Supervisor({ user }) {
                           )}
                           {isFinished && (
                             <>
-                              <button onClick={() => {
-                                // Pre-load existing photos into local state for editing
-                                const photoKey = `${stop.id}-${vi}`;
-                                if (!stopPhotos[photoKey]) {
-                                  setStopPhotos(prev => ({...prev, [photoKey]: visit.photos||[]}));
-                                }
-                                setChecklistModal({ stopId:stop.id, visitIdx:vi, mode:"edit" });
-                              }}
+                              <button onClick={() => setChecklistModal({ stopId:stop.id, visitIdx:vi, mode:"edit" })}
                                 style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"8px 14px", fontSize:13, border:"1px solid #E4E9F0" }) }}>
-                                ✏️ Editar{visits.length > 1 ? ` #${vi+1}` : ""}
+                                ✏️ Editar{visits.length>1?` #${vi+1}`:""}
                               </button>
                               {isClosed && (
                                 <button onClick={() => resetVisit(stop.id, vi)}
@@ -427,31 +440,15 @@ export default function Supervisor({ user }) {
               </>
             )}
 
-            {/* Pending stops with reorder */}
+            {/* Pending stops — drag to reorder */}
             {pendingStops.length > 0 && (
-              <>
-                <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:16 }}>
-                  Pendientes esta semana ({pendingStops.length})
-                </div>
-                {pendingStops.map((stop, i) => (
-                  <div key={stop.id} style={{ background:"#fff", borderRadius:12, padding:"10px 12px", marginBottom:6, border:"1px solid #E4E9F0", display:"flex", alignItems:"center", gap:8, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
-                    <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
-                      <button onClick={() => reorderStop(stop.id, i, -1)} disabled={i===0}
-                        style={{ ...btn({ background:"none", color:i===0?"#E4E9F0":C.muted, padding:"1px 6px", fontSize:12, opacity:i===0?.3:1 }) }}>▲</button>
-                      <button onClick={() => reorderStop(stop.id, i, 1)} disabled={i===pendingStops.length-1}
-                        style={{ ...btn({ background:"none", color:i===pendingStops.length-1?"#E4E9F0":C.muted, padding:"1px 6px", fontSize:12, opacity:i===pendingStops.length-1?.3:1 }) }}>▼</button>
-                    </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:600, color:C.text, fontSize:13 }}>{stop.place}</div>
-                      <div style={{ fontSize:11, color:C.muted }}>{stop.address}</div>
-                    </div>
-                    <button onClick={() => markToday(stop.id)}
-                      style={{ ...btn({ background:C.primaryLight, color:C.primary, padding:"7px 14px", fontSize:13 }) }}>
-                      + Hoy
-                    </button>
-                  </div>
-                ))}
-              </>
+              <div style={{ marginTop:16 }}>
+                <ReorderableList
+                  stops={pendingStops}
+                  onReorder={handleReorder}
+                  onMarkToday={markToday}
+                />
+              </div>
             )}
 
             {pendingStops.length===0 && todayStops.every(s=>["done","closed"].includes(s.status)) && stops.length>0 && (
@@ -526,7 +523,7 @@ export default function Supervisor({ user }) {
           <div style={{ background:"#fff", borderRadius:"20px 20px 16px 16px", padding:24, width:"100%", maxWidth:460, marginBottom:8 }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight:800, color:"#DC2626", fontSize:16, marginBottom:6 }}>🔒 Marcar como cerrado</div>
-            <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.5 }}>¿Confirmas que el establecimiento estaba cerrado al momento de la visita?</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.5 }}>¿Confirmas que el establecimiento estaba cerrado?</div>
             <div style={{ display:"flex", gap:8 }}>
               <button onClick={() => setConfirmModal(null)}
                 style={{ ...btn({ flex:1, padding:"11px", background:"#F4F6F9", color:C.muted, border:"1px solid #E4E9F0", fontSize:14 }) }}>Cancelar</button>

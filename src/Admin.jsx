@@ -23,7 +23,7 @@ function Ring({ pct, color, size=50 }) {
 }
 
 function exportCSV(supervisors, routes) {
-  const rows = [["Supervisor","Establecimiento","Dirección","Estado","Visita#","Entrada","Salida","EntradaEditada","SalidaEditada","CheckOK","CheckProblemas","Notas","Fotos"]];
+  const rows = [["Supervisor","Establecimiento","Dirección","Estado","Visita#","Entrada","Salida","EntradaEditada","SalidaEditada","CheckOK","CheckProblemas","Notas"]];
   supervisors.forEach(sup => {
     (routes[sup.id]||[]).forEach(stop => {
       const visits = stop.visits||[];
@@ -33,7 +33,7 @@ function exportCSV(supervisors, routes) {
         visits.forEach((v,i) => {
           const ok  = (v.checklist||[]).filter(c=>c.result==="ok").map(c=>c.label).join("; ");
           const bad = (v.checklist||[]).filter(c=>c.result==="issue").map(c=>`${c.label}${c.note?": "+c.note:""}`).join("; ");
-          rows.push([sup.name,stop.place,stop.address,STATUS[v.status]?.label||v.status,i+1,v.checkIn||"—",v.checkOut||"—",v.checkInEdited?"⚠️Sí":"No",v.checkOutEdited?"⚠️Sí":"No",ok||"—",bad||"—",v.generalNotes||"—",v.photos?.length||0]);
+          rows.push([sup.name,stop.place,stop.address,STATUS[v.status]?.label||v.status,i+1,v.checkIn||"—",v.checkOut||"—",v.checkInEdited?"⚠️Sí":"No",v.checkOutEdited?"⚠️Sí":"No",ok||"—",bad||"—",v.generalNotes||"—"]);
         });
       }
     });
