@@ -119,7 +119,30 @@ export default function Admin({ user }) {
   async function addSupervisor(){if(!form.name?.trim())return;const ref=doc(collection(db,"supervisors"));await setDoc(ref,{name:form.name.trim(),avatar:initials(form.name),color:form.color||COLORS[0],email:form.email||"",createdAt:Date.now()});setRoutes(prev=>({...prev,[ref.id]:[]}));closeModal();}
   async function editSupervisor(){await updateDoc(doc(db,"supervisors",form.id),{name:form.name.trim(),avatar:initials(form.name),color:form.color,email:form.email||""});closeModal();}
   async function deleteSupervisor(id){if(!confirm("¿Eliminar supervisor?"))return;const stops=await getDocs(collection(db,"supervisors",id,"stops"));await Promise.all(stops.docs.map(d=>deleteDoc(d.ref)));await deleteDoc(doc(db,"supervisors",id));if(selectedSup===id){setSelectedSup(null);setNavTab("dashboard");}}
-  async function editStop(){await updateDoc(doc(db,"supervisors",form.supId,"stops",form.stopId),{place:form.place.trim(),address:(form.address||"").trim()});closeModal();}
+  async function addStop(){
+    if(!form.place?.trim())return;
+    const stops=routes[form.supId]||[];
+    await addDoc(collection(db,"supervisors",form.supId,"stops"),{
+      place:form.place.trim(),
+      address:(form.address||"").trim(),
+      status:"pending",
+      visits:[],
+      alertSent:false,
+      scheduledDay:null,
+      order:stops.length
+    });
+    closeModal();
+  }
+    async function resetWeek(supId){
+    const stops=routes[supId]||[];
+    await Promise.all(stops.map(s=>updateDoc(doc(db,"supervisors",supId,"stops",s.id),{
+      status:"pending",
+      visits:[],
+      scheduledDay:null,
+      alertSent:false
+    })));
+  }
+    async function editStop(){await updateDoc(doc(db,"supervisors",form.supId,"stops",form.stopId),{place:form.place.trim(),address:(form.address||"").trim()});closeModal();}
   async function deleteStop(supId,stopId){await deleteDoc(doc(db,"supervisors",supId,"stops",stopId));}
   async function reorderStop(supId,idx,dir){const arr=[...(routes[supId]||[])];const to=idx+dir;if(to<0||to>=arr.length)return;await updateDoc(doc(db,"supervisors",supId,"stops",arr[idx].id),{order:to});await updateDoc(doc(db,"supervisors",supId,"stops",arr[to].id),{order:idx});}
   // Approve as supervisor
