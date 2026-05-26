@@ -1,10 +1,7 @@
 import { useState } from "react";
 import { CHECKLIST_ITEMS, C, btn } from "./constants";
 
-// Checklist only — NO photos inside. Photos are handled outside.
-// checkInTime is passed in and NEVER modified here.
 export default function ChecklistModal({ checkInTime, existingData, onSave, onCancel, isEditing = false }) {
-
   const initChecks = () => {
     const c = {};
     (existingData?.checklist||[]).forEach(item => {
@@ -21,8 +18,6 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
   const [checks, setChecks]       = useState(initChecks);
   const [itemNotes, setItemNotes] = useState(initNotes);
   const [general, setGeneral]     = useState(existingData?.generalNotes || "");
-
-  // Time editing — only available when editing existing visit
   const [editCheckIn, setEditCheckIn]   = useState(existingData?.checkIn || "");
   const [editCheckOut, setEditCheckOut] = useState(existingData?.checkOut || "");
   const [showTimeEdit, setShowTimeEdit] = useState(false);
@@ -34,28 +29,23 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
 
   const okCount    = Object.values(checks).filter(v => v === "ok").length;
   const issueCount = Object.values(checks).filter(v => v === "issue").length;
-  const unchecked  = CHECKLIST_ITEMS.length - okCount - issueCount;
   const canSave    = okCount + issueCount > 0;
 
   function handleSave() {
     if (!canSave) return;
-
     const checklist = CHECKLIST_ITEMS.map(item => ({
       id:     item.id,
       label:  item.label,
       result: checks[item.id] || "unchecked",
       note:   itemNotes[item.id] || "",
     }));
-
-    const now = new Date().toLocaleTimeString("es-MX", { hour:"2-digit", minute:"2-digit" });
-
-    // CRITICAL: checkIn is ALWAYS the time from "Iniciar" — never the completion time
+    const now = new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"});
+    // checkIn is ALWAYS the time from "Iniciar" — never the current time
     const finalCheckIn  = isEditing ? (editCheckIn || existingData?.checkIn) : checkInTime;
     const finalCheckOut = isEditing ? (editCheckOut || now) : now;
-
     onSave({
       checklist,
-      generalNotes: general,
+      generalNotes:   general,
       checkIn:        finalCheckIn,
       checkOut:       finalCheckOut,
       checkInEdited:  isEditing && editCheckIn !== existingData?.checkIn,
@@ -76,7 +66,7 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
               </div>
               {!isEditing && checkInTime && (
                 <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>
-                  Entrada registrada: <strong style={{ color:C.primary }}>{checkInTime}</strong>
+                  Entrada: <strong style={{ color:C.primary }}>{checkInTime}</strong>
                 </div>
               )}
             </div>
@@ -89,15 +79,15 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
           {/* Stats */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:14 }}>
             <div style={{ background:"#ECFDF5", borderRadius:10, padding:"7px 10px", textAlign:"center" }}>
-              <div style={{ fontSize:16, fontWeight:800, color:"#059669" }}>{okCount}</div>
-              <div style={{ fontSize:10, color:"#059669", fontWeight:600 }}>Revisado OK</div>
+              <div style={{ fontSize:18, fontWeight:800, color:"#059669" }}>{okCount}</div>
+              <div style={{ fontSize:10, color:"#059669", fontWeight:600 }}>OK</div>
             </div>
             <div style={{ background:"#FEF2F2", borderRadius:10, padding:"7px 10px", textAlign:"center" }}>
-              <div style={{ fontSize:16, fontWeight:800, color:"#DC2626" }}>{issueCount}</div>
-              <div style={{ fontSize:10, color:"#DC2626", fontWeight:600 }}>Con problema</div>
+              <div style={{ fontSize:18, fontWeight:800, color:"#DC2626" }}>{issueCount}</div>
+              <div style={{ fontSize:10, color:"#DC2626", fontWeight:600 }}>Problema</div>
             </div>
             <div style={{ background:"#F8FAFC", borderRadius:10, padding:"7px 10px", textAlign:"center" }}>
-              <div style={{ fontSize:16, fontWeight:800, color:"#9CA3AF" }}>{unchecked}</div>
+              <div style={{ fontSize:18, fontWeight:800, color:"#9CA3AF" }}>{CHECKLIST_ITEMS.length-okCount-issueCount}</div>
               <div style={{ fontSize:10, color:"#9CA3AF", fontWeight:600 }}>Sin revisar</div>
             </div>
           </div>
@@ -107,12 +97,12 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
             <div style={{ background:"#FEF3C7", borderRadius:10, padding:"8px 12px", marginBottom:12, border:"1px solid #FDE68A" }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                 <div style={{ fontSize:11, fontWeight:700, color:"#92400E" }}>
-                  ⏱ Horario · Entrada: {editCheckIn||"—"} · Salida: {editCheckOut||"—"}
-                  {(editCheckIn!==existingData?.checkIn||editCheckOut!==existingData?.checkOut) && <span style={{ color:"#DC2626" }}> ⚠️ editado</span>}
+                  ⏱ {editCheckIn||"—"} → {editCheckOut||"—"}
+                  {(editCheckIn!==existingData?.checkIn||editCheckOut!==existingData?.checkOut)&&<span style={{ color:"#DC2626" }}> ⚠️ editado</span>}
                 </div>
                 <button onClick={()=>setShowTimeEdit(!showTimeEdit)}
                   style={{ background:"#D97706", border:"none", borderRadius:6, padding:"3px 10px", fontSize:11, fontWeight:700, color:"#fff", cursor:"pointer" }}>
-                  {showTimeEdit?"Cerrar":"Editar"}
+                  {showTimeEdit?"Cerrar":"Editar horario"}
                 </button>
               </div>
               {showTimeEdit && (
@@ -133,46 +123,32 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
           )}
         </div>
 
-        {/* Scrollable checklist */}
+        {/* Checklist */}
         <div style={{ overflowY:"auto", padding:"0 20px", flex:1 }}>
           {CHECKLIST_ITEMS.map(item => {
-            const val      = checks[item.id];
-            const isOk     = val === "ok";
-            const isIssue  = val === "issue";
+            const val     = checks[item.id];
+            const isOk    = val === "ok";
+            const isIssue = val === "issue";
             return (
               <div key={item.id} style={{ marginBottom:7 }}>
                 <div style={{
                   display:"flex", alignItems:"center", gap:10,
-                  background: isOk?"#ECFDF5" : isIssue?"#FEF2F2" : "#F8FAFC",
+                  background: isOk?"#ECFDF5":isIssue?"#FEF2F2":"#F8FAFC",
                   borderRadius:12, padding:"10px 12px",
                   border:`1.5px solid ${isOk?"#6EE7B7":isIssue?"#FCA5A5":"#E4E9F0"}`,
                   transition:"all .15s"
                 }}>
-                  <span style={{ fontSize:17, flexShrink:0, lineHeight:1 }}>{item.icon}</span>
-                  <span style={{ flex:1, fontSize:13, fontWeight:600, color:C.text, lineHeight:1.3 }}>{item.label}</span>
-                  <button onClick={() => toggle(item.id, "ok")}
-                    style={{
-                      width:36, height:36, borderRadius:9, border:`1.5px solid ${isOk?"#059669":"#D1D5DB"}`,
-                      background: isOk?"#059669":"#fff", color:isOk?"#fff":"#9CA3AF",
-                      fontSize:16, fontWeight:700, cursor:"pointer", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center"
-                    }}>✓</button>
-                  <button onClick={() => toggle(item.id, "issue")}
-                    style={{
-                      width:36, height:36, borderRadius:9, border:`1.5px solid ${isIssue?"#DC2626":"#D1D5DB"}`,
-                      background: isIssue?"#DC2626":"#fff", color:isIssue?"#fff":"#9CA3AF",
-                      fontSize:16, fontWeight:700, cursor:"pointer", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center"
-                    }}>✕</button>
+                  <span style={{ fontSize:17, flexShrink:0 }}>{item.icon}</span>
+                  <span style={{ flex:1, fontSize:13, fontWeight:600, color:C.text }}>{item.label}</span>
+                  <button onClick={()=>toggle(item.id,"ok")}
+                    style={{ width:36, height:36, borderRadius:9, border:`1.5px solid ${isOk?"#059669":"#D1D5DB"}`, background:isOk?"#059669":"#fff", color:isOk?"#fff":"#9CA3AF", fontSize:16, fontWeight:700, cursor:"pointer", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>✓</button>
+                  <button onClick={()=>toggle(item.id,"issue")}
+                    style={{ width:36, height:36, borderRadius:9, border:`1.5px solid ${isIssue?"#DC2626":"#D1D5DB"}`, background:isIssue?"#DC2626":"#fff", color:isIssue?"#fff":"#9CA3AF", fontSize:16, fontWeight:700, cursor:"pointer", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
                 </div>
                 {isIssue && (
-                  <textarea
-                    value={itemNotes[item.id]||""}
-                    onChange={e => setItemNotes(p => ({...p, [item.id]: e.target.value}))}
-                    placeholder="Describe el problema encontrado..."
-                    style={{
-                      width:"100%", marginTop:4, border:"1.5px solid #FCA5A5", borderRadius:10,
-                      padding:"8px 12px", fontSize:12, outline:"none", resize:"none", minHeight:56,
-                      color:C.text, background:"#FEF9F9", boxSizing:"border-box", lineHeight:1.5
-                    }}/>
+                  <textarea value={itemNotes[item.id]||""} onChange={e=>setItemNotes(p=>({...p,[item.id]:e.target.value}))}
+                    placeholder="Describe el problema..."
+                    style={{ width:"100%", marginTop:4, border:"1.5px solid #FCA5A5", borderRadius:10, padding:"8px 12px", fontSize:12, outline:"none", resize:"none", minHeight:56, color:C.text, background:"#FEF9F9", boxSizing:"border-box" }}/>
                 )}
               </div>
             );
@@ -181,32 +157,18 @@ export default function ChecklistModal({ checkInTime, existingData, onSave, onCa
           {/* General notes */}
           <div style={{ marginTop:10, marginBottom:8 }}>
             <div style={{ fontSize:12, fontWeight:700, color:C.muted, marginBottom:6 }}>
-              Notas adicionales o incidentes
-              <span style={{ fontWeight:400, color:C.subtle }}> — opcional</span>
+              Notas adicionales o incidentes <span style={{ fontWeight:400, color:C.subtle }}>— opcional</span>
             </div>
-            <textarea
-              value={general}
-              onChange={e => setGeneral(e.target.value)}
-              placeholder="Observaciones generales o incidentes de esta visita..."
-              style={{
-                width:"100%", border:"1.5px solid #E4E9F0", borderRadius:12,
-                padding:"10px 12px", fontSize:13, outline:"none", resize:"none",
-                minHeight:72, color:C.text, boxSizing:"border-box", lineHeight:1.6
-              }}/>
+            <textarea value={general} onChange={e=>setGeneral(e.target.value)}
+              placeholder="Observaciones generales o incidentes..."
+              style={{ width:"100%", border:"1.5px solid #E4E9F0", borderRadius:12, padding:"10px 12px", fontSize:13, outline:"none", resize:"none", minHeight:72, color:C.text, boxSizing:"border-box", lineHeight:1.6 }}/>
           </div>
         </div>
 
         {/* Footer */}
         <div style={{ padding:"12px 20px 24px", flexShrink:0, borderTop:"1px solid #F1F5F9" }}>
           <button onClick={handleSave} disabled={!canSave}
-            style={{
-              width:"100%", padding:"14px", fontSize:15, fontWeight:700,
-              background: canSave ? "linear-gradient(135deg, #1D4ED8, #1E40AF)" : "#E5E7EB",
-              color: canSave ? "#fff" : "#9CA3AF",
-              border:"none", borderRadius:13, cursor:canSave?"pointer":"not-allowed",
-              boxShadow: canSave ? "0 4px 12px rgba(29,78,216,.3)" : "none",
-              transition:"all .2s"
-            }}>
+            style={{ width:"100%", padding:"14px", fontSize:15, fontWeight:700, background:canSave?"linear-gradient(135deg,#1D4ED8,#1E40AF)":"#E5E7EB", color:canSave?"#fff":"#9CA3AF", border:"none", borderRadius:13, cursor:canSave?"pointer":"not-allowed", boxShadow:canSave?"0 4px 12px rgba(29,78,216,.3)":"none" }}>
             {isEditing ? "Guardar cambios" : "Completar visita"}
           </button>
         </div>

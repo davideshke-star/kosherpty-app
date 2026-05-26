@@ -119,7 +119,6 @@ export default function Admin({ user }) {
   async function addSupervisor(){if(!form.name?.trim())return;const ref=doc(collection(db,"supervisors"));await setDoc(ref,{name:form.name.trim(),avatar:initials(form.name),color:form.color||COLORS[0],email:form.email||"",createdAt:Date.now()});setRoutes(prev=>({...prev,[ref.id]:[]}));closeModal();}
   async function editSupervisor(){await updateDoc(doc(db,"supervisors",form.id),{name:form.name.trim(),avatar:initials(form.name),color:form.color,email:form.email||""});closeModal();}
   async function deleteSupervisor(id){if(!confirm("¿Eliminar supervisor?"))return;const stops=await getDocs(collection(db,"supervisors",id,"stops"));await Promise.all(stops.docs.map(d=>deleteDoc(d.ref)));await deleteDoc(doc(db,"supervisors",id));if(selectedSup===id){setSelectedSup(null);setNavTab("dashboard");}}
-  async function addStop(){if(!form.place?.trim())return;const stops=routes[form.supId]||[];await addDoc(collection(db,"supervisors",form.supId,"stops"),{place:form.place.trim(),address:(form.address||"").trim(),status:"pending",visits:[],photos:[],alertSent:false,scheduledDay:null,order:stops.length});closeModal();}
   async function editStop(){await updateDoc(doc(db,"supervisors",form.supId,"stops",form.stopId),{place:form.place.trim(),address:(form.address||"").trim()});closeModal();}
   async function deleteStop(supId,stopId){await deleteDoc(doc(db,"supervisors",supId,"stops",stopId));}
   async function reorderStop(supId,idx,dir){const arr=[...(routes[supId]||[])];const to=idx+dir;if(to<0||to>=arr.length)return;await updateDoc(doc(db,"supervisors",supId,"stops",arr[idx].id),{order:to});await updateDoc(doc(db,"supervisors",supId,"stops",arr[to].id),{order:idx});}
@@ -129,7 +128,6 @@ export default function Admin({ user }) {
   async function approveAsAdmin(uid){await updateDoc(doc(db,"users",uid),{role:"admin",assignedSupId:""});}
   async function rejectUser(uid){await deleteDoc(doc(db,"users",uid));}
   async function resolveSuggestion(id){await updateDoc(doc(db,"suggestions",id),{status:"resolved"});}
-  async function resetWeek(supId){const stops=routes[supId]||[];await Promise.all(stops.map(s=>updateDoc(doc(db,"supervisors",supId,"stops",s.id),{status:"pending",visits:[],photos:[],scheduledDay:null,alertSent:false})));}
 
   function openModal(type,data={}){setModal(type);setForm(data);}
   function closeModal(){setModal(null);setForm({});}
@@ -252,7 +250,6 @@ export default function Admin({ user }) {
                       {v.checklist.filter(c=>c.result==="issue").length>0&&<span style={{ fontSize:11, color:C.danger, fontWeight:600 }}>❌ {v.checklist.filter(c=>c.result==="issue").length} observación</span>}
                     </div>}
                     {v.generalNotes&&<div style={{ fontSize:11, color:C.muted, marginTop:4 }}>📝 {v.generalNotes}</div>}
-                    {v.photos?.length>0&&<div style={{ display:"flex", gap:5, marginTop:6, flexWrap:"wrap" }}>{v.photos.map((p,pi)=><img key={pi} src={p.url} alt="" style={{ width:44, height:44, objectFit:"cover", borderRadius:7, border:`1px solid ${C.border}` }}/>)}</div>}
                     <div style={{ display:"flex", gap:5, marginTop:8 }}>
                       <button onClick={()=>openModal("editStop",{supId:selectedSup,stopId:stop.id,place:stop.place,address:stop.address})} style={{ ...btn({ background:C.bg, color:C.muted, padding:"5px 9px", fontSize:12, border:`1px solid ${C.border}` }) }}>✎</button>
                       <button onClick={()=>deleteStop(selectedSup,stop.id)} style={{ ...btn({ background:C.bg, color:C.danger, padding:"5px 9px", fontSize:12, border:`1px solid ${C.border}` }) }}>🗑</button>
