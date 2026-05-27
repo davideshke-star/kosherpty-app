@@ -1,7 +1,7 @@
 {
   "name": "kosher-shevet-rutas",
   "private": true,
-  "version": "4.0.0",
+  "version": "11.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

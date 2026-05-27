@@ -1,6 +1,6 @@
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider } from "./firebase";
-import { C, btn } from "./constants";
+import { C } from "./constants";
 import { LogoIcon } from "./Logo";
 
 export default function Login() {
@@ -13,39 +13,28 @@ export default function Login() {
     <div style={{ minHeight:"100vh", background:"#F4F6F9", display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
       <div style={{ width:"100%", maxWidth:360 }}>
 
-        {/* Brand */}
         <div style={{ textAlign:"center", marginBottom:32 }}>
-          <div style={{ display:"flex", justifyContent:"center", marginBottom:16 }}>
-            <LogoIcon size={56}/>
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:14 }}>
+            <LogoIcon size={60}/>
           </div>
-          <div style={{ fontSize:11, fontWeight:700, color:C.primary, textTransform:"uppercase", letterSpacing:2, marginBottom:6 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#1D4ED8", textTransform:"uppercase", letterSpacing:2, marginBottom:6 }}>
             Kosher Shevet Ahim
           </div>
-          <div style={{ fontSize:24, fontWeight:800, color:C.text, letterSpacing:"-.5px" }}>
+          <div style={{ fontSize:24, fontWeight:800, color:"#0F172A", letterSpacing:"-.5px" }}>
             Gestión de Rutas
           </div>
-          <div style={{ fontSize:13, color:C.muted, marginTop:6 }}>
-            Sistema de supervisión
-          </div>
+          <div style={{ fontSize:13, color:"#6B7280", marginTop:6 }}>Sistema de supervisión</div>
         </div>
 
-        {/* Card */}
         <div style={{ background:"#fff", borderRadius:20, padding:28, boxShadow:"0 4px 24px rgba(0,0,0,.08)" }}>
-          <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:4 }}>Iniciar sesión</div>
-          <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.5 }}>
-            Accede al sistema con tu cuenta corporativa.
+          <div style={{ fontSize:15, fontWeight:700, color:"#0F172A", marginBottom:4 }}>Iniciar sesión</div>
+          <div style={{ fontSize:13, color:"#6B7280", marginBottom:20, lineHeight:1.5 }}>
+            Accede con tu cuenta corporativa.
           </div>
-
           <button onClick={login}
-            style={{
-              width:"100%", display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-              background:"#fff", border:`1.5px solid #E4E9F0`, borderRadius:12,
-              padding:"12px 20px", fontSize:14, fontWeight:600, color:C.text,
-              cursor:"pointer", boxShadow:"0 1px 3px rgba(0,0,0,.06)",
-              transition:"box-shadow .2s, border-color .2s"
-            }}
-            onMouseEnter={e => { e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.1)"; e.currentTarget.style.borderColor="#C7D2DC"; }}
-            onMouseLeave={e => { e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,.06)"; e.currentTarget.style.borderColor="#E4E9F0"; }}>
+            style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"center", gap:10, background:"#fff", border:"1.5px solid #E4E9F0", borderRadius:12, padding:"13px 20px", fontSize:14, fontWeight:600, color:"#0F172A", cursor:"pointer", boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.1)"}
+            onMouseLeave={e => e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,.06)"}>
             <svg width="18" height="18" viewBox="0 0 48 48">
               <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
               <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -54,9 +43,8 @@ export default function Login() {
             </svg>
             Continuar con Google
           </button>
-
-          <p style={{ fontSize:12, color:C.subtle, textAlign:"center", marginTop:16, lineHeight:1.6 }}>
-            Solo usuarios autorizados por el administrador pueden acceder.
+          <p style={{ fontSize:12, color:"#9CA3AF", textAlign:"center", marginTop:16, lineHeight:1.6 }}>
+            Solo usuarios autorizados pueden acceder.
           </p>
         </div>
       </div>
