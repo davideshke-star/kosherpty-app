@@ -2,17 +2,19 @@ import { useState, useEffect } from "react";
 import { signOut } from "firebase/auth";
 import {
   collection, doc, onSnapshot, setDoc, updateDoc,
-  deleteDoc, addDoc, getDocs, query, orderBy, writeBatch
+  deleteDoc, addDoc, getDocs, query, orderBy, where, writeBatch
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import {
-  APP_NAME, APP_SUB, C, COLORS, CHECKLIST_ITEMS,
-  STATUS, btn, nowStr, dateStr, todayFull, weekRange,
-  initials, minAgo
+  APP_NAME, APP_SUB, C, COLORS, STATUS, btn,
+  nowStr, dateStr, weekRange, initials, minAgo
 } from "./constants";
 import { LogoIcon, LogoText } from "./Logo";
+import { getGlobalChecklist, saveGlobalChecklist } from "./checklistStore";
+import { buildWeeklyReportText } from "./reportBuilder";
+import VisitDetailModal from "./VisitDetailModal";
+import ChecklistEditorModal from "./ChecklistEditorModal";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function Badge({ status }) {
   const st = STATUS[status] || STATUS.pending;
   return <span style={{ fontSize:11, fontWeight:600, color:st.color, background:st.color+"18", borderRadius:6, padding:"3px 9px", whiteSpace:"nowrap" }}>{st.label}</span>;
@@ -31,16 +33,22 @@ function Ring({ pct, color, size=50 }) {
   );
 }
 
-// ── CSV Export ────────────────────────────────────────────────────────────────
+function downloadText(filename, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text],{type:"text/plain;charset=utf-8"}));
+  a.download = filename;
+  a.click();
+}
+
 function exportCSV(supervisors, routes) {
   const rows = [["Supervisor","Establecimiento","Dirección","Estado","Visita","Fecha","Entrada","EntradaEditada","Salida","SalidaEditada","CheckOK","CheckProblemas","Notas"]];
   supervisors.forEach(sup => {
     (routes[sup.id]||[]).forEach(stop => {
       const visits = stop.visits||[];
       if (!visits.length) {
-        rows.push([sup.name, stop.place, stop.address, STATUS[stop.status]?.label||stop.status, ...Array(10).fill("—")]);
+        rows.push([sup.name, stop.place, stop.address, STATUS[stop.status]?.label||stop.status, ...Array(9).fill("—")]);
       } else {
-        visits.forEach((v, i) => {
+        visits.forEach((v,i) => {
           const ok  = (v.checklist||[]).filter(c=>c.result==="ok").map(c=>c.label).join("; ");
           const bad = (v.checklist||[]).filter(c=>c.result==="issue").map(c=>`${c.label}${c.note?": "+c.note:""}`).join("; ");
           rows.push([sup.name, stop.place, stop.address, STATUS[v.status]?.label||v.status, i+1, v.date||"—", v.checkIn||"—", v.checkInEdited?"⚠️Sí":"No", v.checkOut||"—", v.checkOutEdited?"⚠️Sí":"No", ok||"—", bad||"—", v.generalNotes||"—"]);
@@ -55,66 +63,58 @@ function exportCSV(supervisors, routes) {
   a.click();
 }
 
-function buildTXT(supervisors, routes) {
-  let t = `REPORTE SEMANAL — KOSHER SHEVET AHIM\nSemana: ${weekRange()}\n\n`;
-  supervisors.forEach(sup => {
-    const stops = routes[sup.id]||[];
-    const done  = stops.filter(s=>["done","closed"].includes(s.status)).length;
-    t += `SUPERVISOR: ${sup.name}\nCompletadas: ${done}/${stops.length}\n\n`;
-    stops.forEach(stop => {
-      t += `  ESTABLECIMIENTO: ${stop.place} (${stop.address})\n`;
-      t += `  Estado: ${STATUS[stop.status]?.label||stop.status}\n`;
-      (stop.visits||[]).forEach((v,i) => {
-        t += `  Visita ${i+1} [${v.date||"—"}]: Entrada ${v.checkIn||"—"}${v.checkInEdited?" ⚠️EDITADO":""} Salida ${v.checkOut||"—"}${v.checkOutEdited?" ⚠️EDITADO":""}\n`;
-        if (v.checklist) {
-          const ok  = v.checklist.filter(c=>c.result==="ok").map(c=>c.label).join(", ");
-          const bad = v.checklist.filter(c=>c.result==="issue").map(c=>`${c.label}${c.note?": "+c.note:""}`).join(", ");
-          if (ok)  t += `    ✅ OK: ${ok}\n`;
-          if (bad) t += `    ❌ Problemas: ${bad}\n`;
-        }
-        if (v.generalNotes) t += `    📝 Notas: ${v.generalNotes}\n`;
-        if (v.status==="closed") t += `    🔒 ESTABLECIMIENTO CERRADO\n`;
-      });
-      t += "\n";
-    });
-    t += "\n";
-  });
-  return t;
-}
+const THIRTY_DAYS_MS = 30*24*60*60*1000;
 
-// ── Main ──────────────────────────────────────────────────────────────────────
 export default function Admin({ user }) {
   const [supervisors,   setSupervisors]   = useState([]);
   const [routes,        setRoutes]        = useState({});
-  const [pendingUsers,  setPendingUsers]  = useState([]);
-  const [suggestions,   setSuggestions]  = useState([]);
+  const [allUsers,      setAllUsers]      = useState([]);
+  const [suggestions,   setSuggestions]   = useState([]);
   const [historyLog,    setHistoryLog]    = useState([]);
+  const [reports,       setReports]       = useState([]);
   const [alerts,        setAlerts]        = useState([]);
+  const [checklistItems,setChecklistItems]= useState([]);
   const [tab,           setTab]           = useState("dashboard");
-  const [selectedSup,   setSelectedSup]  = useState(null);
+  const [selectedSup,   setSelectedSup]   = useState(null);
   const [modal,         setModal]         = useState(null);
   const [form,          setForm]          = useState({});
+  const [detailVisit,   setDetailVisit]   = useState(null);
+  const [stopChecklistEditor, setStopChecklistEditor] = useState(null);
 
   // ── Firestore listeners ───────────────────────────────────────────────────
   useEffect(() => {
     const u1 = onSnapshot(collection(db,"supervisors"), snap => setSupervisors(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    const u2 = onSnapshot(collection(db,"users"),       snap => setPendingUsers(snap.docs.map(d=>d.data()).filter(u=>u.role==="pending")));
-    const u3 = onSnapshot(query(collection(db,"history"),orderBy("timestamp","desc")), snap => setHistoryLog(snap.docs.map(d=>({id:d.id,...d.data()})).slice(0,100)));
-    const u4 = onSnapshot(query(collection(db,"suggestions"),orderBy("createdAt","desc")), snap => setSuggestions(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    return () => { u1(); u2(); u3(); u4(); };
+    const u2 = onSnapshot(collection(db,"users"), snap => setAllUsers(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    const u3 = onSnapshot(query(collection(db,"history"),orderBy("timestamp","desc")), snap => setHistoryLog(snap.docs.map(d=>({id:d.id,...d.data()})).slice(0,150)));
+    const u4 = onSnapshot(query(collection(db,"suggestions"),orderBy("createdAt","desc")), snap => {
+      const docs = snap.docs.map(d=>({id:d.id,...d.data()}));
+      setSuggestions(docs);
+      docs.forEach(s => { if (s.createdAt && Date.now()-s.createdAt > THIRTY_DAYS_MS) deleteDoc(doc(db,"suggestions",s.id)); });
+    });
+    const u5 = onSnapshot(query(collection(db,"reports"),orderBy("generatedAt","desc")), snap => setReports(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    getGlobalChecklist().then(setChecklistItems);
+    return () => { u1(); u2(); u3(); u4(); u5(); };
   }, []);
 
   useEffect(() => {
     if (!supervisors.length) return;
     const unsubs = supervisors.map(sup =>
-      onSnapshot(query(collection(db,"supervisors",sup.id,"stops"),orderBy("order","asc")), snap =>
-        setRoutes(prev => ({ ...prev, [sup.id]: snap.docs.map(d=>({id:d.id,...d.data()})) }))
-      )
+      onSnapshot(query(collection(db,"supervisors",sup.id,"stops"),orderBy("order","asc")), snap => {
+        const stopsList = snap.docs.map(d=>({id:d.id,...d.data()}));
+        setRoutes(prev => ({ ...prev, [sup.id]: stopsList }));
+        // Migration safety net: under the old model a stop's top-level status
+        // could be stuck at "closed". That's now purely historical (tracked
+        // per-visit), so normalize any leftover ones back to pending.
+        stopsList.forEach(stop => {
+          if (stop.status === "closed") {
+            updateDoc(doc(db,"supervisors",sup.id,"stops",stop.id), { status:"pending" });
+          }
+        });
+      })
     );
     return () => unsubs.forEach(u=>u());
   }, [supervisors]);
 
-  // Alert checker every minute
   useEffect(() => {
     const check = () => {
       supervisors.forEach(sup => {
@@ -132,101 +132,141 @@ export default function Admin({ user }) {
     return () => clearInterval(t);
   }, [routes, supervisors]);
 
+  // ── History logging for admin's own actions ──────────────────────────────
+  async function logAdmin(place, action) {
+    await addDoc(collection(db,"history"), {
+      time: nowStr(), timestamp: Date.now(),
+      supervisor: "👑 Admin", supColor: C.primary,
+      place, action
+    });
+  }
+
   // ── Progress ──────────────────────────────────────────────────────────────
   const getProgress = supId => {
     const stops = routes[supId]||[];
     if (!stops.length) return { done:0, total:0, pct:0 };
-    const done = stops.filter(s=>["done","closed"].includes(s.status)).length;
+    const done = stops.filter(s=>s.status==="done").length;
     return { done, total:stops.length, pct:Math.round(done/stops.length*100) };
   };
 
-  // ── CRUD ──────────────────────────────────────────────────────────────────
+  // ── Supervisor CRUD ───────────────────────────────────────────────────────
   async function addSupervisor() {
     if (!form.name?.trim()) return;
     const ref = doc(collection(db,"supervisors"));
     await setDoc(ref, { name:form.name.trim(), avatar:initials(form.name), color:form.color||COLORS[0], email:form.email||"", createdAt:Date.now() });
     setRoutes(prev => ({ ...prev, [ref.id]:[] }));
+    await logAdmin(form.name.trim(), "Agregó supervisor");
     closeModal();
   }
 
   async function editSupervisor() {
     await updateDoc(doc(db,"supervisors",form.id), { name:form.name.trim(), avatar:initials(form.name), color:form.color, email:form.email||"" });
+    await logAdmin(form.name.trim(), "Editó supervisor");
     closeModal();
   }
 
   async function deleteSupervisor(id) {
-    if (!confirm("¿Eliminar supervisor y todas sus paradas?")) return;
+    const sup = supervisors.find(s=>s.id===id);
+    if (!confirm(`¿Eliminar a ${sup?.name} y todas sus paradas?`)) return;
     const stops = await getDocs(collection(db,"supervisors",id,"stops"));
     await Promise.all(stops.docs.map(d=>deleteDoc(d.ref)));
     await deleteDoc(doc(db,"supervisors",id));
+    const usersSnap = await getDocs(query(collection(db,"users"), where("assignedSupId","==",id)));
+    await Promise.all(usersSnap.docs.map(d => updateDoc(d.ref, { role:"pending", assignedSupId:"" })));
+    await logAdmin(sup?.name||"—", "Eliminó supervisor");
     if (selectedSup===id) { setSelectedSup(null); setTab("dashboard"); }
   }
 
+  // ── Stop CRUD ─────────────────────────────────────────────────────────────
   async function addStop() {
     if (!form.place?.trim()) return;
     const stops = routes[form.supId]||[];
     await addDoc(collection(db,"supervisors",form.supId,"stops"), {
-      place:    form.place.trim(),
-      address:  (form.address||"").trim(),
-      status:   "pending",
-      visits:   [],
-      alertSent:false,
-      scheduledDay:null,
-      order:    stops.length,
+      place: form.place.trim(), address:(form.address||"").trim(),
+      status:"pending", visits:[], alertSent:false, order:stops.length,
     });
+    await logAdmin(form.place.trim(), "Agregó parada");
     closeModal();
   }
 
   async function editStop() {
-    await updateDoc(doc(db,"supervisors",form.supId,"stops",form.stopId), {
-      place:   form.place.trim(),
-      address: (form.address||"").trim(),
-    });
+    await updateDoc(doc(db,"supervisors",form.supId,"stops",form.stopId), { place:form.place.trim(), address:(form.address||"").trim() });
+    await logAdmin(form.place.trim(), "Editó parada");
     closeModal();
   }
 
   async function deleteStop(supId, stopId) {
+    const stop = (routes[supId]||[]).find(s=>s.id===stopId);
     await deleteDoc(doc(db,"supervisors",supId,"stops",stopId));
+    await logAdmin(stop?.place||"—", "Eliminó parada");
   }
 
-  async function reorderStop(supId, idx, dir) {
-    const arr = [...(routes[supId]||[])];
-    const to  = idx + dir;
-    if (to < 0 || to >= arr.length) return;
-    await updateDoc(doc(db,"supervisors",supId,"stops",arr[idx].id), { order:to });
-    await updateDoc(doc(db,"supervisors",supId,"stops",arr[to].id),  { order:idx });
-  }
-
-  async function resetWeek(supId) {
+  async function resetWeekManual(supId) {
+    const sup = supervisors.find(s=>s.id===supId);
+    if (!confirm(`¿Reiniciar manualmente la semana de ${sup?.name}? Se borran todos los check-ins.`)) return;
     const stops = routes[supId]||[];
     const batch = writeBatch(db);
-    stops.forEach(s => batch.update(doc(db,"supervisors",supId,"stops",s.id), { status:"pending", visits:[], scheduledDay:null, alertSent:false }));
+    stops.forEach(s => batch.update(doc(db,"supervisors",supId,"stops",s.id), { status:"pending", visits:[], alertSent:false }));
     await batch.commit();
+    await logAdmin(sup?.name||"—", "Reinició semana manualmente");
   }
 
+  // ── Users ─────────────────────────────────────────────────────────────────
   async function approveUser(uid, supId) {
+    const u = allUsers.find(x=>x.uid===uid);
     await updateDoc(doc(db,"users",uid), { role:"supervisor", assignedSupId:supId||"" });
+    await logAdmin(u?.name||u?.email||"—", "Aprobó como supervisor");
   }
-
   async function approveAsAdmin(uid) {
+    const u = allUsers.find(x=>x.uid===uid);
     await updateDoc(doc(db,"users",uid), { role:"admin", assignedSupId:"" });
+    await logAdmin(u?.name||u?.email||"—", "Aprobó como admin");
   }
-
   async function rejectUser(uid) {
+    const u = allUsers.find(x=>x.uid===uid);
+    await updateDoc(doc(db,"users",uid), { role:"pending", assignedSupId:"" });
+    await logAdmin(u?.name||u?.email||"—", "Rechazó solicitud");
+  }
+  async function removeUser(uid) {
+    const u = allUsers.find(x=>x.uid===uid);
     await deleteDoc(doc(db,"users",uid));
+    await logAdmin(u?.name||u?.email||"—", "Eliminó acceso de usuario");
+  }
+  async function resolveSuggestion(id) { await updateDoc(doc(db,"suggestions",id), { status:"resolved" }); }
+
+  // ── Checklist editing ────────────────────────────────────────────────────
+  async function saveGlobalChecklistEdit(newItems) {
+    await saveGlobalChecklist(newItems);
+    setChecklistItems(newItems);
+    await logAdmin("Checklist general", "Editó el checklist general");
+    setModal(null);
+  }
+  function openStopChecklistEditor(supId, stopId, place, customChecklist) {
+    const initial = (customChecklist && customChecklist.length) ? customChecklist : checklistItems;
+    setStopChecklistEditor({ supId, stopId, place, initial, isCustomized: !!(customChecklist && customChecklist.length) });
+  }
+  async function saveStopChecklist(newItems) {
+    const { supId, stopId, place } = stopChecklistEditor;
+    await updateDoc(doc(db,"supervisors",supId,"stops",stopId), { customChecklist:newItems });
+    await logAdmin(place, "Personalizó el checklist de esta parada");
+    setStopChecklistEditor(null);
+  }
+  async function revertStopChecklist() {
+    const { supId, stopId, place } = stopChecklistEditor;
+    await updateDoc(doc(db,"supervisors",supId,"stops",stopId), { customChecklist:[] });
+    await logAdmin(place, "Quitó el checklist personalizado de esta parada");
+    setStopChecklistEditor(null);
   }
 
-  async function resolveSuggestion(id) {
-    await updateDoc(doc(db,"suggestions",id), { status:"resolved" });
-  }
-
-  function openModal(type, data={}) { setModal(type); setForm(data); }
-  function closeModal()             { setModal(null);  setForm({}); }
+  function openModal(type,data={}) { setModal(type); setForm(data); }
+  function closeModal() { setModal(null); setForm({}); }
 
   // ── Derived ───────────────────────────────────────────────────────────────
-  const sup        = selectedSup ? supervisors.find(s=>s.id===selectedSup) : null;
-  const allStops   = Object.values(routes).flat();
-  const pendingSug = suggestions.filter(s=>s.status==="pending");
+  const sup = selectedSup ? supervisors.find(s=>s.id===selectedSup) : null;
+  const pendingCount = allUsers.filter(u=>u.role==="pending").length;
+  const adminList = allUsers.filter(u=>u.role==="admin");
+  const supervisorUsers = allUsers.filter(u=>u.role==="supervisor");
+  const pendingSugg = suggestions.filter(s=>s.status==="pending");
 
   const LS = { fontSize:12, color:C.muted, marginBottom:5, display:"block", fontWeight:500 };
   const IS = { width:"100%", border:`1.5px solid ${C.border}`, borderRadius:10, padding:"10px 12px", fontSize:14, outline:"none", boxSizing:"border-box", marginBottom:12, color:C.text, background:"#fff" };
@@ -234,8 +274,9 @@ export default function Admin({ user }) {
   const TABS = [
     { id:"dashboard", icon:"📊", label:"Panel" },
     { id:"settings",  icon:"⚙️", label:"Settings" },
-    { id:"users",     icon:"👥", label:"Usuarios", badge: pendingUsers.length + pendingSug.length },
-    { id:"history",   icon:"📋", label:"Historial" },
+    { id:"checklist", icon:"📋", label:"Checklist" },
+    { id:"users",     icon:"👥", label:"Usuarios", badge: pendingCount + pendingSugg.length },
+    { id:"history",   icon:"📜", label:"Historial" },
     { id:"exports",   icon:"📤", label:"Exportar" },
   ];
 
@@ -249,9 +290,12 @@ export default function Admin({ user }) {
           {selectedSup && tab==="dashboard" && (
             <button onClick={()=>setSelectedSup(null)} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"6px 10px", fontSize:13, border:"1px solid #E4E9F0", marginRight:4 }) }}>←</button>
           )}
-          <LogoIcon size={30}/><LogoText/>
+          <LogoIcon size={32}/><LogoText/>
         </div>
         <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+          {pendingCount>0 && (
+            <button onClick={()=>setTab("users")} style={{ ...btn({ background:"#EFF6FF", color:C.primary, padding:"6px 11px", fontSize:12 }) }}>👥 {pendingCount}</button>
+          )}
           {alerts.length>0 && (
             <button onClick={()=>openModal("alerts")} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"6px 11px", fontSize:12 }) }}>🔔 {alerts.length}</button>
           )}
@@ -261,26 +305,11 @@ export default function Admin({ user }) {
 
       <div style={{ padding:"14px 16px 90px", maxWidth:800, margin:"0 auto" }}>
 
-        {/* ── DASHBOARD LIST ── */}
+        {/* ── DASHBOARD LIST (per-supervisor, no aggregate row) ── */}
         {tab==="dashboard" && !selectedSup && (
           <>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10, marginBottom:14 }}>
-              {[
-                { icon:"✅", val:allStops.filter(s=>s.status==="done").length,       label:"Completados" },
-                { icon:"🔒", val:allStops.filter(s=>s.status==="closed").length,     label:"Cerrados" },
-                { icon:"📋", val:allStops.filter(s=>s.status==="pending").length,    label:"Pendientes semana" },
-                { icon:"⏳", val:allStops.filter(s=>s.status==="in-progress").length,label:"En curso" },
-              ].map(c => (
-                <div key={c.label} style={{ background:"#fff", borderRadius:14, padding:"13px 16px", boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-                  <div style={{ fontSize:20, marginBottom:4 }}>{c.icon}</div>
-                  <div style={{ fontSize:26, fontWeight:800, color:C.text, lineHeight:1 }}>{c.val}</div>
-                  <div style={{ fontSize:11, color:C.muted, marginTop:2, fontWeight:500 }}>{c.label}</div>
-                </div>
-              ))}
-            </div>
-
+            <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:10 }}>{weekRange()}</div>
             {supervisors.length===0 && <div style={{ textAlign:"center", color:C.muted, padding:48 }}>No hay supervisores. Ve a ⚙️ Settings.</div>}
-
             {supervisors.map(s => {
               const p       = getProgress(s.id);
               const stops   = routes[s.id]||[];
@@ -309,68 +338,78 @@ export default function Admin({ user }) {
 
         {/* ── DASHBOARD DETAIL ── */}
         {tab==="dashboard" && selectedSup && sup && (() => {
-          const stops       = routes[selectedSup]||[];
-          const p           = getProgress(selectedSup);
-          const todayStops  = stops.filter(s=>["today","in-progress","done","closed"].includes(s.status));
-          const pendStops   = stops.filter(s=>s.status==="pending");
+          const stops = routes[selectedSup]||[];
+          const p = getProgress(selectedSup);
+
+          const inProgressCards = [];
+          const completedCards  = [];
+          stops.forEach(stop => (stop.visits||[]).forEach((v,vi) => {
+            if (v.status==="in-progress") inProgressCards.push({ stop, visit:v, vIdx:vi, total:(stop.visits||[]).length });
+            if (v.status==="done")        completedCards.push({ stop, visit:v, vIdx:vi, total:(stop.visits||[]).length });
+          }));
+          const pendingList = stops.filter(s=>s.status==="pending");
+
           return (
             <>
-              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14, flexWrap:"wrap" }}>
                 <div style={{ width:46, height:46, borderRadius:12, background:sup.color, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:15, color:"#fff" }}>{sup.avatar}</div>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:17, fontWeight:800, color:C.text }}>{sup.name}</div>
-                  <div style={{ fontSize:12, color:C.muted }}>{weekRange()} · {p.done}/{p.total}</div>
+                  <div style={{ fontSize:12, color:C.muted }}>{weekRange()} · {p.done}/{p.total} completadas</div>
                 </div>
                 <button onClick={()=>openModal("addStop",{supId:selectedSup})} style={{ ...btn({ background:"#EFF6FF", color:C.primary, padding:"8px 12px", fontSize:13 }) }}>+ Parada</button>
-                <button onClick={()=>{ if(confirm("¿Reiniciar semana? Se borran todos los check-ins.")) resetWeek(selectedSup); }} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"8px 10px", fontSize:13, border:"1px solid #E4E9F0" }) }}>🔄</button>
+                <button onClick={()=>resetWeekManual(selectedSup)} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"8px 10px", fontSize:13, border:"1px solid #E4E9F0" }) }}>🔄</button>
               </div>
 
-              {todayStops.map(stop => {
-                const visits = stop.visits||[];
-                return visits.map((v,vi) => (
-                  <div key={`${stop.id}-${vi}`} style={{ background:"#fff", borderRadius:13, padding:14, marginBottom:7, border:`1px solid ${v.status==="in-progress"?"#FDE68A":v.status==="closed"?"#FCA5A5":v.status==="done"?"#6EE7B7":"#E4E9F0"}`, boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:5 }}>
-                      <div style={{ flex:1 }}>
-                        <span style={{ fontWeight:700, color:C.text, fontSize:14 }}>{stop.place}</span>
-                        {visits.length>1&&<span style={{ fontSize:11, color:C.primary, fontWeight:700, marginLeft:6 }}>Visita #{vi+1}</span>}
-                      </div>
-                      <Badge status={v.status||"pending"}/>
-                    </div>
-                    <div style={{ fontSize:11, color:C.muted, marginBottom:4 }}>{stop.address}</div>
-                    {(v.checkIn||v.checkOut)&&<div style={{ fontSize:11, color:C.subtle, marginBottom:4 }}>
-                      {v.checkIn&&<span>Entrada: {v.checkIn}{v.checkInEdited&&<span style={{ color:"#D97706" }}> ⚠️</span>} </span>}
-                      {v.checkOut&&<span>Salida: {v.checkOut}{v.checkOutEdited&&<span style={{ color:"#D97706" }}> ⚠️</span>}</span>}
-                    </div>}
-                    {v.checklist&&<div style={{ display:"flex", gap:6, marginBottom:4, flexWrap:"wrap" }}>
-                      <span style={{ fontSize:11, color:"#059669", fontWeight:600, background:"#ECFDF5", borderRadius:6, padding:"2px 8px" }}>✅ {v.checklist.filter(c=>c.result==="ok").length} OK</span>
-                      {v.checklist.filter(c=>c.result==="issue").length>0&&<span style={{ fontSize:11, color:"#DC2626", fontWeight:600, background:"#FEF2F2", borderRadius:6, padding:"2px 8px" }}>❌ {v.checklist.filter(c=>c.result==="issue").length} problema</span>}
-                    </div>}
-                    {v.generalNotes&&<div style={{ fontSize:11, color:C.muted, marginTop:3 }}>📝 {v.generalNotes}</div>}
-                    <div style={{ display:"flex", gap:5, marginTop:8 }}>
-                      <button onClick={()=>openModal("editStop",{supId:selectedSup,stopId:stop.id,place:stop.place,address:stop.address})} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"5px 9px", fontSize:12, border:"1px solid #E4E9F0" }) }}>✎</button>
-                      <button onClick={()=>deleteStop(selectedSup,stop.id)} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"5px 9px", fontSize:12 }) }}>🗑</button>
-                    </div>
-                  </div>
-                ));
-              })}
-
-              {pendStops.length>0&&(
+              {inProgressCards.length>0 && (
                 <>
-                  <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:14 }}>Pendientes ({pendStops.length})</div>
-                  {pendStops.map((stop,i) => (
-                    <div key={stop.id} style={{ background:"#fff", borderRadius:12, padding:"10px 14px", marginBottom:6, border:"1px solid #E4E9F0", display:"flex", alignItems:"center", gap:10, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
+                  <div style={{ fontSize:10, fontWeight:700, color:C.warning, textTransform:"uppercase", letterSpacing:1, marginBottom:8 }}>En curso ({inProgressCards.length})</div>
+                  {inProgressCards.map(({stop,visit,vIdx,total},i)=>(
+                    <div key={i} style={{ background:"#fff", borderRadius:12, padding:"11px 14px", marginBottom:6, border:"1.5px solid #FDE68A", display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:700, color:C.text, fontSize:13 }}>{stop.place}{total>1?` · Visita #${vIdx+1}`:""}</div>
+                        <div style={{ fontSize:11, color:C.muted }}>Entrada {visit.checkIn||"—"}</div>
+                      </div>
+                      <Badge status="in-progress"/>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {completedCards.length>0 && (
+                <>
+                  <div style={{ fontSize:10, fontWeight:700, color:C.success, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:inProgressCards.length?16:0 }}>Completadas ({completedCards.length}) · toca para ver el detalle</div>
+                  {completedCards.map(({stop,visit,vIdx,total},i)=>(
+                    <div key={i} onClick={()=>setDetailVisit({stop,visit,visitNum:vIdx+1,totalVisits:total})}
+                      style={{ background:"#fff", borderRadius:12, padding:"11px 14px", marginBottom:6, border:"1.5px solid #6EE7B7", display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:700, color:C.text, fontSize:13 }}>{stop.place}{total>1?` · Visita #${vIdx+1}`:""}</div>
+                        <div style={{ fontSize:11, color:C.muted }}>{visit.date||"—"} · {visit.checkIn||"—"} - {visit.checkOut||"—"}</div>
+                      </div>
+                      {visit.checklist?.some(c=>c.result==="issue") && <span style={{ fontSize:11, color:"#DC2626", fontWeight:600 }}>❌</span>}
+                      <span style={{ fontSize:14, color:C.subtle }}>›</span>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {pendingList.length>0 && (
+                <>
+                  <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:16 }}>Pendientes ({pendingList.length})</div>
+                  {pendingList.map(stop => (
+                    <div key={stop.id} style={{ background:"#fff", borderRadius:12, padding:"10px 14px", marginBottom:6, border:"1px solid #E4E9F0", display:"flex", alignItems:"center", gap:10 }}>
                       <div style={{ flex:1 }}>
                         <div style={{ fontWeight:600, color:C.text, fontSize:13 }}>{stop.place}</div>
                         <div style={{ fontSize:11, color:C.muted }}>{stop.address}</div>
                       </div>
-                      <button onClick={()=>reorderStop(selectedSup,i,-1)} disabled={i===0} style={{ ...btn({ background:"none", color:i===0?"#E4E9F0":C.muted, padding:"3px 7px", fontSize:13 }) }}>▲</button>
-                      <button onClick={()=>reorderStop(selectedSup,i,1)} disabled={i===pendStops.length-1} style={{ ...btn({ background:"none", color:i===pendStops.length-1?"#E4E9F0":C.muted, padding:"3px 7px", fontSize:13 }) }}>▼</button>
                       <button onClick={()=>openModal("editStop",{supId:selectedSup,stopId:stop.id,place:stop.place,address:stop.address})} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"5px 9px", fontSize:12, border:"1px solid #E4E9F0" }) }}>✎</button>
                       <button onClick={()=>deleteStop(selectedSup,stop.id)} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"5px 9px", fontSize:12 }) }}>🗑</button>
                     </div>
                   ))}
                 </>
               )}
+
+              {stops.length===0 && <div style={{ textAlign:"center", color:C.muted, padding:32 }}>Sin paradas asignadas todavía.</div>}
             </>
           );
         })()}
@@ -384,7 +423,6 @@ export default function Admin({ user }) {
             </div>
             {supervisors.map(s => {
               const stops = routes[s.id]||[];
-              const p = getProgress(s.id);
               return (
                 <div key={s.id} style={{ background:"#fff", borderRadius:16, padding:16, marginBottom:10, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
@@ -399,10 +437,9 @@ export default function Admin({ user }) {
                   {stops.map((st,i) => (
                     <div key={st.id} style={{ display:"flex", alignItems:"center", gap:7, background:"#F4F6F9", borderRadius:8, padding:"6px 10px", marginBottom:3 }}>
                       <div style={{ width:6, height:6, borderRadius:"50%", background:STATUS[st.status]?.color||"#D1D5DB", flexShrink:0 }}/>
-                      <span style={{ flex:1, fontSize:12, color:C.text, fontWeight:500 }}>{i+1}. {st.place}</span>
+                      <span style={{ flex:1, fontSize:12, color:C.text, fontWeight:500 }}>{i+1}. {st.place}{st.customChecklist?.length>0&&<span style={{ color:C.primary }}> 📋</span>}</span>
                       <span style={{ fontSize:11, color:C.muted }}>{st.address}</span>
-                      <button onClick={()=>reorderStop(s.id,i,-1)} disabled={i===0} style={{ ...btn({ background:"none", color:i===0?"#E4E9F0":C.muted, padding:"1px 5px", fontSize:12 }) }}>▲</button>
-                      <button onClick={()=>reorderStop(s.id,i,1)} disabled={i===stops.length-1} style={{ ...btn({ background:"none", color:i===stops.length-1?"#E4E9F0":C.muted, padding:"1px 5px", fontSize:12 }) }}>▼</button>
+                      <button onClick={()=>openStopChecklistEditor(s.id,st.id,st.place,st.customChecklist)} title="Checklist personalizado" style={{ ...btn({ background:"none", color:C.primary, padding:"2px 6px", fontSize:13 }) }}>📋</button>
                       <button onClick={()=>openModal("editStop",{supId:s.id,stopId:st.id,place:st.place,address:st.address})} style={{ ...btn({ background:"none", color:C.muted, padding:"2px 6px", fontSize:12 }) }}>✎</button>
                       <button onClick={()=>deleteStop(s.id,st.id)} style={{ ...btn({ background:"none", color:"#DC2626", padding:"2px 6px", fontSize:12 }) }}>🗑</button>
                     </div>
@@ -414,29 +451,39 @@ export default function Admin({ user }) {
           </>
         )}
 
+        {/* ── CHECKLIST (global) ── */}
+        {tab==="checklist" && (
+          <>
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>Checklist general</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.5 }}>Estos son los ítems que los supervisores revisan en cada visita. Puedes editarlos, eliminarlos o agregar nuevos — los cambios se aplican de inmediato. Para un restaurante específico, usa el ícono 📋 en Settings.</div>
+            <button onClick={()=>setModal("editGlobalChecklist")} style={{ ...btn({ background:C.primary, color:"#fff", padding:"12px 20px", fontSize:14, width:"100%", marginBottom:16 }) }}>✎ Editar checklist general</button>
+            <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+              {checklistItems.map(item => (
+                <div key={item.id} style={{ background:"#fff", borderRadius:12, padding:"10px 14px", display:"flex", alignItems:"center", gap:10, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
+                  <span style={{ fontSize:17 }}>{item.icon}</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:C.text }}>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
         {/* ── USUARIOS ── */}
         {tab==="users" && (
           <>
-            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:14 }}>Usuarios pendientes</div>
-            {pendingUsers.length===0
-              ? <div style={{ textAlign:"center", color:C.muted, padding:32, fontSize:14 }}>No hay usuarios pendientes.</div>
-              : pendingUsers.map(u => (
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>Usuarios pendientes</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:14 }}>{pendingCount} esperando aprobación.</div>
+            {allUsers.filter(u=>u.role==="pending").length===0
+              ? <div style={{ textAlign:"center", color:C.muted, padding:24, fontSize:14 }}>No hay usuarios pendientes.</div>
+              : allUsers.filter(u=>u.role==="pending").map(u => (
                 <div key={u.uid} style={{ background:"#fff", borderRadius:14, padding:16, marginBottom:8, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                     <div style={{ width:40, height:40, borderRadius:"50%", background:"#E4E9F0", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:C.muted, fontSize:14 }}>{initials(u.name||u.email)}</div>
-                    <div>
-                      <div style={{ fontWeight:700, color:C.text }}>{u.name}</div>
-                      <div style={{ fontSize:11, color:C.muted }}>{u.email}</div>
-                    </div>
+                    <div><div style={{ fontWeight:700, color:C.text }}>{u.name}</div><div style={{ fontSize:11, color:C.muted }}>{u.email}</div></div>
                   </div>
-                  <div style={{ fontSize:11, color:C.muted, marginBottom:8, fontWeight:600 }}>Asignar como supervisor de:</div>
+                  <div style={{ fontSize:11, color:C.muted, marginBottom:8, fontWeight:600 }}>Aprobar como supervisor de:</div>
                   <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
-                    {supervisors.map(s => (
-                      <button key={s.id} onClick={()=>approveUser(u.uid,s.id)}
-                        style={{ ...btn({ background:s.color+"18", color:s.color, padding:"7px 14px", fontSize:13 }) }}>
-                        {s.name}
-                      </button>
-                    ))}
+                    {supervisors.map(s => <button key={s.id} onClick={()=>approveUser(u.uid,s.id)} style={{ ...btn({ background:s.color+"18", color:s.color, padding:"7px 14px", fontSize:13 }) }}>{s.name}</button>)}
                   </div>
                   <div style={{ borderTop:"1px solid #F1F5F9", paddingTop:10, display:"flex", gap:6 }}>
                     <button onClick={()=>approveAsAdmin(u.uid)} style={{ ...btn({ background:"#EFF6FF", color:C.primary, padding:"7px 14px", fontSize:13, fontWeight:700 }) }}>👑 Aprobar como Admin</button>
@@ -445,9 +492,35 @@ export default function Admin({ user }) {
                 </div>
               ))}
 
-            {suggestions.length > 0 && (
+            <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:24 }}>👑 Administradores autorizados</div>
+            {adminList.length===0
+              ? <div style={{ fontSize:13, color:C.subtle, marginBottom:8 }}>Solo tú (administrador principal).</div>
+              : adminList.map(u => (
+                <div key={u.uid} style={{ background:"#fff", borderRadius:14, padding:14, marginBottom:6, boxShadow:"0 1px 3px rgba(0,0,0,.06)", display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:36, height:36, borderRadius:"50%", background:C.primaryLight, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:C.primary, fontSize:13 }}>{initials(u.name||u.email)}</div>
+                  <div style={{ flex:1 }}><div style={{ fontWeight:700, color:C.text, fontSize:13 }}>{u.name}</div><div style={{ fontSize:11, color:C.muted }}>{u.email}</div></div>
+                  <button onClick={()=>{ if(confirm(`¿Quitar acceso de admin a ${u.name}?`)) removeUser(u.uid); }} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"6px 12px", fontSize:12 }) }}>Eliminar</button>
+                </div>
+              ))}
+
+            <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:20 }}>👤 Supervisores activos</div>
+            {supervisorUsers.length===0
+              ? <div style={{ fontSize:13, color:C.subtle, marginBottom:8 }}>Ningún supervisor con acceso todavía.</div>
+              : supervisorUsers.map(u => (
+                <div key={u.uid} style={{ background:"#fff", borderRadius:14, padding:14, marginBottom:6, boxShadow:"0 1px 3px rgba(0,0,0,.06)", display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:36, height:36, borderRadius:"50%", background:"#ECFDF5", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:C.success, fontSize:13 }}>{initials(u.name||u.email)}</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, color:C.text, fontSize:13 }}>{u.name}</div>
+                    <div style={{ fontSize:11, color:C.muted }}>{u.email}{u.assignedSupId&&supervisors.find(s=>s.id===u.assignedSupId)&&` — ${supervisors.find(s=>s.id===u.assignedSupId).name}`}</div>
+                  </div>
+                  <button onClick={()=>{ if(confirm(`¿Eliminar acceso de ${u.name}?`)) removeUser(u.uid); }} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"6px 12px", fontSize:12 }) }}>Eliminar</button>
+                </div>
+              ))}
+
+            {suggestions.length>0 && (
               <>
-                <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:12, marginTop:24 }}>💬 Sugerencias</div>
+                <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4, marginTop:28 }}>💬 Sugerencias</div>
+                <div style={{ fontSize:12, color:C.subtle, marginBottom:12 }}>Se eliminan automáticamente después de 30 días.</div>
                 {suggestions.map(s => (
                   <div key={s.id} style={{ background:"#fff", borderRadius:14, padding:14, marginBottom:8, boxShadow:"0 1px 3px rgba(0,0,0,.06)", opacity:s.status==="resolved"?.6:1 }}>
                     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
@@ -470,9 +543,8 @@ export default function Admin({ user }) {
         {tab==="history" && (
           <>
             <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:14 }}>Historial</div>
-            {historyLog.length===0
-              ? <div style={{ textAlign:"center", color:C.muted, padding:40 }}>Sin actividad.</div>
-              : <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {historyLog.length===0?<div style={{ textAlign:"center", color:C.muted, padding:40 }}>Sin actividad.</div>
+              :<div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {historyLog.map((h,i) => (
                   <div key={i} style={{ background:"#fff", borderRadius:10, padding:"9px 13px", display:"flex", alignItems:"center", gap:10, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
                     <div style={{ fontSize:11, color:C.subtle, minWidth:36 }}>{h.time}</div>
@@ -485,20 +557,17 @@ export default function Admin({ user }) {
             {historyLog.length>0&&(
               <div style={{ marginTop:20 }}>
                 <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:10 }}>Resumen semanal</div>
-                {supervisors.map(s => {
-                  const p=getProgress(s.id); const stops=routes[s.id]||[];
-                  return (
-                    <div key={s.id} style={{ background:"#fff", borderRadius:12, padding:"12px 14px", marginBottom:6, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-                        <div style={{ fontWeight:700, color:C.text }}>{s.name}</div>
-                        <div style={{ fontWeight:800, color:p.pct===100?"#059669":C.text }}>{p.pct}%</div>
-                      </div>
-                      <div style={{ display:"flex", gap:8, fontSize:11, flexWrap:"wrap" }}>
-                        {Object.entries(STATUS).map(([key,cfg])=>{ const count=stops.filter(st=>st.status===key).length; return count?<span key={key} style={{ color:cfg.color, fontWeight:500 }}>{cfg.label}: <strong>{count}</strong></span>:null; })}
-                      </div>
+                {supervisors.map(s => {const p=getProgress(s.id);const stops=routes[s.id]||[];return(
+                  <div key={s.id} style={{ background:"#fff", borderRadius:12, padding:"12px 14px", marginBottom:6, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                      <div style={{ fontWeight:700, color:C.text }}>{s.name}</div>
+                      <div style={{ fontWeight:800, color:p.pct===100?"#059669":C.text }}>{p.pct}%</div>
                     </div>
-                  );
-                })}
+                    <div style={{ display:"flex", gap:8, fontSize:11, flexWrap:"wrap" }}>
+                      {Object.entries(STATUS).map(([key,cfg])=>{const count=stops.filter(st=>st.status===key).length;return count?<span key={key} style={{ color:cfg.color, fontWeight:500 }}>{cfg.label}: <strong>{count}</strong></span>:null;})}
+                    </div>
+                  </div>
+                );})}
               </div>
             )}
           </>
@@ -508,18 +577,35 @@ export default function Admin({ user }) {
         {tab==="exports" && (
           <>
             <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:14 }}>Exportar datos</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:24 }}>
               <button onClick={()=>exportCSV(supervisors,routes)}
                 style={{ ...btn({ background:"#fff", color:C.text, padding:"16px 18px", fontSize:14, boxShadow:"0 1px 3px rgba(0,0,0,.06)", textAlign:"left", display:"flex", alignItems:"center", gap:12, width:"100%" }) }}>
                 <span style={{ fontSize:24 }}>📊</span>
-                <div><div style={{ fontWeight:700 }}>Exportar CSV</div><div style={{ fontSize:12, color:C.muted, fontWeight:400, marginTop:2 }}>Compatible con Excel — incluye checklist completo</div></div>
+                <div><div style={{ fontWeight:700 }}>Exportar CSV (semana actual)</div><div style={{ fontSize:12, color:C.muted, fontWeight:400, marginTop:2 }}>Compatible con Excel</div></div>
               </button>
-              <button onClick={()=>{ const t=buildTXT(supervisors,routes); const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([t],{type:"text/plain"})); a.download=`KosherShevet_${dateStr().replace(/\//g,"-")}.txt`; a.click(); }}
+              <button onClick={()=>downloadText(`KosherShevet_${dateStr().replace(/\//g,"-")}.txt`, buildWeeklyReportText(supervisors, routes, weekRange()))}
                 style={{ ...btn({ background:"#fff", color:C.text, padding:"16px 18px", fontSize:14, boxShadow:"0 1px 3px rgba(0,0,0,.06)", textAlign:"left", display:"flex", alignItems:"center", gap:12, width:"100%" }) }}>
                 <span style={{ fontSize:24 }}>📄</span>
-                <div><div style={{ fontWeight:700 }}>Exportar TXT</div><div style={{ fontSize:12, color:C.muted, fontWeight:400, marginTop:2 }}>Reporte legible para compartir o analizar</div></div>
+                <div><div style={{ fontWeight:700 }}>Exportar TXT (semana actual)</div><div style={{ fontSize:12, color:C.muted, fontWeight:400, marginTop:2 }}>Reporte legible para compartir</div></div>
               </button>
             </div>
+
+            <div style={{ fontSize:14, fontWeight:800, color:C.text, marginBottom:4 }}>Reportes semanales guardados</div>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:12 }}>Se generan solos cada sábado a las 11:59 PM.</div>
+            {reports.length===0
+              ? <div style={{ textAlign:"center", color:C.muted, padding:24, fontSize:13 }}>Aún no se ha generado ningún reporte automático.</div>
+              : reports.map(r => (
+                <div key={r.id} style={{ background:"#fff", borderRadius:12, padding:"12px 16px", marginBottom:8, boxShadow:"0 1px 3px rgba(0,0,0,.06)", display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, color:C.text, fontSize:13 }}>Semana {r.weekRange}</div>
+                    <div style={{ fontSize:11, color:C.muted }}>{new Date(r.generatedAt).toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"})}</div>
+                  </div>
+                  <button onClick={()=>downloadText(`KosherShevet_${r.weekRange.replace(/\//g,"-").replace(/\s/g,"")}.txt`, r.text)}
+                    style={{ ...btn({ background:C.primaryLight, color:C.primary, padding:"7px 14px", fontSize:12 }) }}>
+                    ⬇ Descargar
+                  </button>
+                </div>
+              ))}
           </>
         )}
       </div>
@@ -528,16 +614,16 @@ export default function Admin({ user }) {
       <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#fff", borderTop:"1px solid #E4E9F0", display:"flex", zIndex:50, boxShadow:"0 -2px 12px rgba(0,0,0,.06)" }}>
         {TABS.map(t => (
           <button key={t.id} onClick={()=>{ setTab(t.id); setSelectedSup(null); }}
-            style={{ ...btn({ flex:1, padding:"9px 2px", background:"none", color:tab===t.id?C.primary:C.muted, fontSize:9, display:"flex", flexDirection:"column", alignItems:"center", gap:2, borderRadius:0, borderTop:tab===t.id?`2px solid ${C.primary}`:"2px solid transparent", fontWeight:tab===t.id?700:500, position:"relative" }) }}>
-            <span style={{ fontSize:17 }}>{t.icon}</span>
+            style={{ ...btn({ flex:1, padding:"8px 2px", background:"none", color:tab===t.id?C.primary:C.muted, fontSize:8.5, display:"flex", flexDirection:"column", alignItems:"center", gap:2, borderRadius:0, borderTop:tab===t.id?`2px solid ${C.primary}`:"2px solid transparent", fontWeight:tab===t.id?700:500, position:"relative" }) }}>
+            <span style={{ fontSize:16 }}>{t.icon}</span>
             {t.label}
-            {t.badge>0&&<span style={{ position:"absolute", top:4, right:"50%", transform:"translateX(12px)", background:"#DC2626", color:"#fff", borderRadius:"50%", width:14, height:14, fontSize:9, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>{t.badge}</span>}
+            {t.badge>0&&<span style={{ position:"absolute", top:3, right:"50%", transform:"translateX(11px)", background:"#DC2626", color:"#fff", borderRadius:"50%", width:13, height:13, fontSize:8, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>{t.badge}</span>}
           </button>
         ))}
       </div>
 
-      {/* ── MODALS ── */}
-      {modal && modal!=="alerts" && (
+      {/* ── Standard modals (add/edit supervisor, add/edit stop) ── */}
+      {modal && !["alerts","editGlobalChecklist"].includes(modal) && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:200 }} onClick={closeModal}>
           <div style={{ background:"#fff", borderRadius:"24px 24px 0 0", padding:24, width:"100%", maxWidth:480, maxHeight:"85vh", overflowY:"auto" }} onClick={e=>e.stopPropagation()}>
 
@@ -549,10 +635,7 @@ export default function Admin({ user }) {
               <input value={form.email||""} onChange={e=>setForm(p=>({...p,email:e.target.value}))} placeholder="supervisor@email.com" style={IS}/>
               <label style={LS}>Color</label>
               <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:16 }}>
-                {COLORS.map(c=>(
-                  <div key={c} onClick={()=>setForm(p=>({...p,color:c}))}
-                    style={{ width:28, height:28, borderRadius:"50%", background:c, cursor:"pointer", border:form.color===c?"3px solid #0F172A":"3px solid transparent" }}/>
-                ))}
+                {COLORS.map(c=><div key={c} onClick={()=>setForm(p=>({...p,color:c}))} style={{ width:28, height:28, borderRadius:"50%", background:c, cursor:"pointer", border:form.color===c?"3px solid #0F172A":"3px solid transparent" }}/>)}
               </div>
               <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
                 <button onClick={closeModal} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"10px 18px", border:"1px solid #E4E9F0" }) }}>Cancelar</button>
@@ -585,9 +668,38 @@ export default function Admin({ user }) {
                 <div style={{ fontSize:12, color:"#DC2626", marginTop:2 }}>{a.place} — lleva +{a.minutes} min en curso</div>
               </div>
             ))}
-            <button onClick={()=>{ setAlerts([]); closeModal(); }} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"11px", width:"100%", marginTop:8, border:"1px solid #E4E9F0" }) }}>Limpiar alertas</button>
+            <button onClick={()=>{ setAlerts([]); closeModal(); }} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"11px", width:"100%", marginTop:8, border:"1px solid #E4E9F0" }) }}>Limpiar</button>
           </div>
         </div>
+      )}
+
+      {modal==="editGlobalChecklist" && (
+        <ChecklistEditorModal
+          title="Checklist general"
+          items={checklistItems}
+          onSave={saveGlobalChecklistEdit}
+          onCancel={()=>setModal(null)}
+        />
+      )}
+
+      {stopChecklistEditor && (
+        <ChecklistEditorModal
+          title={`Checklist: ${stopChecklistEditor.place}`}
+          items={stopChecklistEditor.initial}
+          onSave={saveStopChecklist}
+          onCancel={()=>setStopChecklistEditor(null)}
+          extraAction={stopChecklistEditor.isCustomized ? { label:"↩ Usar el checklist general (quitar personalización)", onClick:revertStopChecklist } : null}
+        />
+      )}
+
+      {detailVisit && (
+        <VisitDetailModal
+          stop={detailVisit.stop}
+          visit={detailVisit.visit}
+          visitNum={detailVisit.visitNum}
+          totalVisits={detailVisit.totalVisits}
+          onClose={()=>setDetailVisit(null)}
+        />
       )}
     </div>
   );

@@ -1,22 +1,17 @@
 import { C } from "./constants";
 
-export function LogoIcon({ size = 32 }) {
-  const r = Math.round(size * 0.25);
-  const ic = Math.round(size * 0.52);
+// Real Shevet kosher certification logo (crown + K + כשר), served from /public/logo.png
+export function LogoIcon({ size = 32, rounded = true }) {
   return (
     <div style={{
       width: size, height: size, flexShrink: 0,
-      background: "linear-gradient(135deg,#1D4ED8,#1E40AF)",
-      borderRadius: r,
+      borderRadius: rounded ? Math.round(size*0.22) : 0,
+      overflow: "hidden",
       display: "flex", alignItems: "center", justifyContent: "center",
-      boxShadow: "0 2px 8px rgba(29,78,216,.28)"
+      background: "#fff",
+      boxShadow: "0 1px 4px rgba(0,0,0,.12)",
     }}>
-      <svg width={ic} height={ic} viewBox="0 0 24 24" fill="none">
-        <path
-          d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"
-          fill="rgba(255,255,255,0.18)" stroke="white" strokeWidth="1.4"/>
-        <circle cx="12" cy="9" r="2.6" fill="white"/>
-      </svg>
+      <img src="/logo.png" alt="Shevet Kosher" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
     </div>
   );
 }

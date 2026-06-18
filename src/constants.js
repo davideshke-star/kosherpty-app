@@ -24,7 +24,9 @@ export const C = {
   shadowMd:     "0 4px 12px rgba(0,0,0,.08)",
 };
 
-export const CHECKLIST_ITEMS = [
+// Default checklist — seeded into Firestore (settings/checklist) on first run.
+// After that, the live source of truth is Firestore, editable by the admin.
+export const DEFAULT_CHECKLIST_ITEMS = [
   { id:"tolaim",         label:"Tolaim",                               icon:"🔍" },
   { id:"jala",           label:"Hafrashat Jalá",                       icon:"🍞" },
   { id:"hornoBishul",    label:"Bishul Horno",                         icon:"🔥" },
@@ -35,36 +37,62 @@ export const CHECKLIST_ITEMS = [
   { id:"separacion",     label:"Separación Leche/Carne/Parve/Pescado", icon:"⚖️" },
   { id:"mashgiaj",       label:"Mashgiaj",                             icon:"👁"  },
   { id:"ingredientes",   label:"Ingredientes",                         icon:"📦" },
+  { id:"camaras",        label:"Cámaras funcionales",                  icon:"📷" },
+  { id:"candados",       label:"Candados funcionales",                 icon:"🔐" },
 ];
 
+// Status definitions. "closed" is transient — the moment a visit is marked
+// closed, the parent stop reverts to "pending" so it can be reattempted and
+// is never counted as completed.
 export const STATUS = {
   pending:       { label:"Pendiente",  color:"#9CA3AF" },
   today:         { label:"Para hoy",   color:"#1D4ED8" },
   "in-progress": { label:"En curso",  color:"#D97706" },
   done:          { label:"Completado", color:"#059669" },
   closed:        { label:"Cerrado",    color:"#DC2626" },
-  skipped:       { label:"Omitido",    color:"#9CA3AF" },
 };
 
-export const DAYS    = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
-export const nowStr  = () => new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"});
-export const dateStr = () => new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
+// Week now runs Sunday → Saturday. JS getDay() already returns 0 for Sunday
+// through 6 for Saturday, which lines up perfectly with this array.
+export const DAYS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+
+export const nowStr    = () => new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"});
+export const dateStr   = () => new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
 export const todayFull = () => new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"});
-export const weekRange = () => {
-  const d=new Date(), dy=d.getDay(), diff=d.getDate()-dy+(dy===0?-6:1);
-  const mon=new Date(d); mon.setDate(diff);
-  const fri=new Date(mon); fri.setDate(mon.getDate()+4);
-  return `${mon.getDate()}/${mon.getMonth()+1} — ${fri.getDate()}/${fri.getMonth()+1}`;
-};
-export const todayName = () => DAYS[new Date().getDay()===0?6:new Date().getDay()-1];
+
+export const todayName = () => DAYS[new Date().getDay()];
 export const todayISO  = () => new Date().toISOString().split("T")[0];
-export const initials  = n => (n||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-export const minAgo    = t => {
+
+// Sunday-Saturday range containing "today"
+export const weekRange = () => {
+  const d = new Date();
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const sun = new Date(d); sun.setDate(d.getDate() - day);
+  const sat = new Date(sun); sat.setDate(sun.getDate() + 6);
+  return `${sun.getDate()}/${sun.getMonth()+1} — ${sat.getDate()}/${sat.getMonth()+1}`;
+};
+
+// The most recent Saturday 23:59:59 timestamp (ms) at or before "now".
+// Used to decide whether a weekly reset is due.
+export const lastSaturdayCutoff = () => {
+  const d = new Date();
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const daysSinceSat = (day + 1) % 7; // Sat->0, Sun->1, Mon->2 ... Fri->6
+  const cutoff = new Date(d);
+  cutoff.setDate(d.getDate() - daysSinceSat);
+  cutoff.setHours(23,59,59,999);
+  if (cutoff.getTime() > d.getTime()) cutoff.setDate(cutoff.getDate() - 7);
+  return cutoff.getTime();
+};
+
+export const initials = n => (n||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+export const minAgo = t => {
   if(!t) return 0;
   const [h,m]=t.split(":").map(Number), now=new Date(), then=new Date();
   then.setHours(h,m,0,0);
   return Math.floor((now-then)/60000);
 };
+
 export const btn = (ex={}) => ({
   border:"none", cursor:"pointer", fontFamily:"'DM Sans',sans-serif",
   fontWeight:600, borderRadius:10, transition:"all .15s", ...ex

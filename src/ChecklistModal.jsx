@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { CHECKLIST_ITEMS, C, btn } from "./constants";
+import { C, btn } from "./constants";
 
-export default function ChecklistModal({ checkInTime, existingData, isEditing, onSave, onCancel }) {
-  // Initialize from existing data when editing
+export default function ChecklistModal({ items, checkInTime, existingData, isEditing, onSave, onCancel }) {
   const initChecks = () => {
     const c = {};
     (existingData?.checklist || []).forEach(item => {
@@ -35,7 +34,7 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
   function handleSave() {
     if (!canSave) return;
     const now = new Date().toLocaleTimeString("es-MX", { hour:"2-digit", minute:"2-digit" });
-    const checklist = CHECKLIST_ITEMS.map(item => ({
+    const checklist = items.map(item => ({
       id:     item.id,
       label:  item.label,
       result: checks[item.id] || "unchecked",
@@ -44,7 +43,6 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
     onSave({
       checklist,
       generalNotes:   general,
-      // checkIn: when editing use edited value, when new use the time from Iniciar (never current time)
       checkIn:        isEditing ? (editIn || existingData?.checkIn) : checkInTime,
       checkOut:       isEditing ? (editOut || now) : now,
       checkInEdited:  isEditing && editIn  !== existingData?.checkIn,
@@ -56,7 +54,6 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
     <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,.55)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:400 }}>
       <div style={{ background:"#fff", borderRadius:"24px 24px 0 0", width:"100%", maxWidth:540, maxHeight:"92vh", display:"flex", flexDirection:"column", boxShadow:"0 -8px 32px rgba(0,0,0,.12)" }}>
 
-        {/* Header */}
         <div style={{ padding:"20px 20px 0", flexShrink:0 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
             <div>
@@ -75,12 +72,11 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
             </button>
           </div>
 
-          {/* Stats */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:12 }}>
             {[
               { val:okCount,    label:"OK",          bg:"#ECFDF5", color:"#059669" },
               { val:issueCount, label:"Problema",    bg:"#FEF2F2", color:"#DC2626" },
-              { val:CHECKLIST_ITEMS.length-okCount-issueCount, label:"Sin revisar", bg:"#F8FAFC", color:"#9CA3AF" },
+              { val:items.length-okCount-issueCount, label:"Sin revisar", bg:"#F8FAFC", color:"#9CA3AF" },
             ].map(s => (
               <div key={s.label} style={{ background:s.bg, borderRadius:10, padding:"7px 10px", textAlign:"center" }}>
                 <div style={{ fontSize:20, fontWeight:800, color:s.color }}>{s.val}</div>
@@ -89,7 +85,6 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
             ))}
           </div>
 
-          {/* Time editing — only when editing */}
           {isEditing && (
             <div style={{ background:"#FEF3C7", borderRadius:10, padding:"8px 12px", marginBottom:12, border:"1px solid #FDE68A" }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
@@ -117,9 +112,8 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
           )}
         </div>
 
-        {/* Scrollable checklist */}
         <div style={{ overflowY:"auto", padding:"0 20px", flex:1 }}>
-          {CHECKLIST_ITEMS.map(item => {
+          {items.map(item => {
             const val     = checks[item.id];
             const isOk    = val === "ok";
             const isIssue = val === "issue";
@@ -152,7 +146,6 @@ export default function ChecklistModal({ checkInTime, existingData, isEditing, o
           </div>
         </div>
 
-        {/* Footer */}
         <div style={{ padding:"12px 20px 24px", flexShrink:0, borderTop:"1px solid #F1F5F9" }}>
           <button onClick={handleSave} disabled={!canSave}
             style={{ width:"100%", padding:"14px", fontSize:15, fontWeight:700, background:canSave?"linear-gradient(135deg,#1D4ED8,#1E40AF)":"#E5E7EB", color:canSave?"#fff":"#9CA3AF", border:"none", borderRadius:13, cursor:canSave?"pointer":"not-allowed", boxShadow:canSave?"0 4px 12px rgba(29,78,216,.3)":"none" }}>

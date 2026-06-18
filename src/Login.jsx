@@ -15,7 +15,7 @@ export default function Login() {
 
         <div style={{ textAlign:"center", marginBottom:32 }}>
           <div style={{ display:"flex", justifyContent:"center", marginBottom:14 }}>
-            <LogoIcon size={60}/>
+            <LogoIcon size={88}/>
           </div>
           <div style={{ fontSize:11, fontWeight:700, color:"#1D4ED8", textTransform:"uppercase", letterSpacing:2, marginBottom:6 }}>
             Kosher Shevet Ahim
