@@ -355,10 +355,26 @@ export default function Admin({ user }) {
                 <div style={{ width:46, height:46, borderRadius:12, background:sup.color, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:15, color:"#fff" }}>{sup.avatar}</div>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:17, fontWeight:800, color:C.text }}>{sup.name}</div>
-                  <div style={{ fontSize:12, color:C.muted }}>{weekRange()} · {p.done}/{p.total} completadas</div>
+                  <div style={{ fontSize:12, color:C.muted }}>{weekRange()}</div>
                 </div>
-                <button onClick={()=>openModal("addStop",{supId:selectedSup})} style={{ ...btn({ background:"#EFF6FF", color:C.primary, padding:"8px 12px", fontSize:13 }) }}>+ Parada</button>
+                <button onClick={()=>{ setTab("settings"); }} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"8px 12px", fontSize:13, border:"1px solid #E4E9F0" }) }}>⚙️ Settings</button>
                 <button onClick={()=>resetWeekManual(selectedSup)} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"8px 10px", fontSize:13, border:"1px solid #E4E9F0" }) }}>🔄</button>
+              </div>
+
+              {/* Mini dashboard summary */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8, marginBottom:18 }}>
+                {[
+                  { icon:"✅", val:completedCards.length, label:"Completadas", color:"#059669", bg:"#ECFDF5" },
+                  { icon:"⏳", val:inProgressCards.length, label:"En curso",   color:"#D97706", bg:"#FFFBEB" },
+                  { icon:"📋", val:pendingList.length,     label:"Pendientes", color:"#6B7280", bg:"#F4F6F9" },
+                  { icon:"📊", val:p.pct+"%",              label:"Completado", color:sup.color, bg:sup.color+"18" },
+                ].map(c => (
+                  <div key={c.label} style={{ background:c.bg, borderRadius:12, padding:"10px 8px", textAlign:"center" }}>
+                    <div style={{ fontSize:16, marginBottom:2 }}>{c.icon}</div>
+                    <div style={{ fontSize:20, fontWeight:800, color:c.color, lineHeight:1 }}>{c.val}</div>
+                    <div style={{ fontSize:9, color:c.color, fontWeight:600, marginTop:2, textTransform:"uppercase", letterSpacing:.4 }}>{c.label}</div>
+                  </div>
+                ))}
               </div>
 
               {inProgressCards.length>0 && (
@@ -398,12 +414,11 @@ export default function Admin({ user }) {
                   <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:8, marginTop:16 }}>Pendientes ({pendingList.length})</div>
                   {pendingList.map(stop => (
                     <div key={stop.id} style={{ background:"#fff", borderRadius:12, padding:"10px 14px", marginBottom:6, border:"1px solid #E4E9F0", display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ width:6, height:6, borderRadius:"50%", background:"#D1D5DB", flexShrink:0 }}/>
                       <div style={{ flex:1 }}>
                         <div style={{ fontWeight:600, color:C.text, fontSize:13 }}>{stop.place}</div>
                         <div style={{ fontSize:11, color:C.muted }}>{stop.address}</div>
                       </div>
-                      <button onClick={()=>openModal("editStop",{supId:selectedSup,stopId:stop.id,place:stop.place,address:stop.address})} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"5px 9px", fontSize:12, border:"1px solid #E4E9F0" }) }}>✎</button>
-                      <button onClick={()=>deleteStop(selectedSup,stop.id)} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"5px 9px", fontSize:12 }) }}>🗑</button>
                     </div>
                   ))}
                 </>
@@ -528,6 +543,7 @@ export default function Admin({ user }) {
                         {s.type==="Error"?"🐛":s.type==="Mejora"?"💡":"💬"} {s.type}
                       </span>
                       <span style={{ fontSize:11, color:C.muted }}>{s.name}</span>
+                      {s.dateLabel&&<span style={{ fontSize:11, color:C.subtle }}>· {s.dateLabel}</span>}
                       {s.status==="resolved"&&<span style={{ fontSize:11, color:"#059669", fontWeight:600 }}>✓ Resuelto</span>}
                     </div>
                     <div style={{ fontSize:13, color:C.text, lineHeight:1.5, marginBottom:s.status!=="resolved"?10:0 }}>{s.text}</div>

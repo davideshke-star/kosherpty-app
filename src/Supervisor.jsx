@@ -208,7 +208,9 @@ export default function Supervisor({ user }) {
     await addDoc(collection(db,"suggestions"),{
       uid:user.uid, name:supData?.name||"",
       type:sugForm.type, text:sugForm.text.trim(),
-      status:"pending", createdAt:Date.now(), timestamp:new Date().toISOString()
+      status:"pending", createdAt:Date.now(),
+      timestamp:new Date().toISOString(),
+      dateLabel:new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"})
     });
     setSugForm({}); setTab("route");
     alert("¡Sugerencia enviada!");
