@@ -347,6 +347,12 @@ export default function Admin({ user }) {
             if (v.status==="in-progress") inProgressCards.push({ stop, visit:v, vIdx:vi, total:(stop.visits||[]).length });
             if (v.status==="done")        completedCards.push({ stop, visit:v, vIdx:vi, total:(stop.visits||[]).length });
           }));
+          // Sort completed chronologically by date then checkIn time
+          completedCards.sort((a,b) => {
+            const keyA = `${a.visit.date||"0000-00-00"} ${a.visit.checkIn||"00:00"}`;
+            const keyB = `${b.visit.date||"0000-00-00"} ${b.visit.checkIn||"00:00"}`;
+            return keyA.localeCompare(keyB);
+          });
           const pendingList = stops.filter(s=>s.status==="pending");
 
           return (
@@ -402,7 +408,10 @@ export default function Admin({ user }) {
                         <div style={{ fontWeight:700, color:C.text, fontSize:13 }}>{stop.place}{total>1?` · Visita #${vIdx+1}`:""}</div>
                         <div style={{ fontSize:11, color:C.muted }}>{visit.date||"—"} · {visit.checkIn||"—"} - {visit.checkOut||"—"}</div>
                       </div>
-                      {visit.checklist?.some(c=>c.result==="issue") && <span style={{ fontSize:11, color:"#DC2626", fontWeight:600 }}>❌</span>}
+                      <div style={{ display:"flex", gap:5, alignItems:"center" }}>
+                        {(visit.checkInEdited||visit.checkOutEdited) && <span style={{ fontSize:10, color:"#D97706", fontWeight:700, background:"#FEF3C7", borderRadius:5, padding:"1px 6px" }}>⚠️ editado</span>}
+                        {visit.checklist?.some(c=>c.result==="issue") && <span style={{ fontSize:11, color:"#DC2626", fontWeight:600 }}>❌</span>}
+                      </div>
                       <span style={{ fontSize:14, color:C.subtle }}>›</span>
                     </div>
                   ))}

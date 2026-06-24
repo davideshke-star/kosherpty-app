@@ -98,14 +98,22 @@ export default function ChecklistModal({ items, checkInTime, existingData, isEdi
                 </button>
               </div>
               {showTime && (
-                <div style={{ display:"flex", gap:8, marginTop:8 }}>
-                  {[["ENTRADA",editIn,setEditIn],["SALIDA",editOut,setEditOut]].map(([lbl,val,setter]) => (
-                    <div key={lbl} style={{ flex:1 }}>
-                      <div style={{ fontSize:10, fontWeight:600, color:"#92400E", marginBottom:3 }}>{lbl}</div>
-                      <input type="time" value={val} onChange={e => setter(e.target.value)}
-                        style={{ width:"100%", border:"1.5px solid #E4E9F0", borderRadius:8, padding:"7px 10px", fontSize:14, outline:"none" }}/>
-                    </div>
-                  ))}
+                <div>
+                  <div style={{ display:"flex", gap:8, marginTop:8 }}>
+                    {[["ENTRADA",editIn,setEditIn],["SALIDA",editOut,setEditOut]].map(([lbl,val,setter]) => (
+                      <div key={lbl} style={{ flex:1 }}>
+                        <div style={{ fontSize:10, fontWeight:600, color:"#92400E", marginBottom:3 }}>{lbl}</div>
+                        <input
+                          type="text"
+                          value={val}
+                          onChange={e => setter(e.target.value)}
+                          placeholder="ej: 02:30 p.m."
+                          style={{ width:"100%", border:"1.5px solid #E4E9F0", borderRadius:8, padding:"7px 10px", fontSize:13, outline:"none", boxSizing:"border-box" }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize:10, color:"#92400E", marginTop:5, opacity:.7 }}>Formato: 02:30 p.m. o 10:15 a.m.</div>
                 </div>
               )}
             </div>

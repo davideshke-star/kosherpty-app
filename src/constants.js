@@ -56,12 +56,16 @@ export const STATUS = {
 // through 6 for Saturday, which lines up perfectly with this array.
 export const DAYS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 
-export const nowStr    = () => new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"});
+export const nowStr    = () => new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit",hour12:true});
 export const dateStr   = () => new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
 export const todayFull = () => new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"});
 
 export const todayName = () => DAYS[new Date().getDay()];
-export const todayISO  = () => new Date().toISOString().split("T")[0];
+export const todayISO  = () => {
+  const d = new Date();
+  // Use LOCAL date (not UTC) so Panama (UTC-5) never rolls to next day at night
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
 
 // Sunday-Saturday range containing "today"
 export const weekRange = () => {
