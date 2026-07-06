@@ -224,7 +224,9 @@ export default function Admin({ user }) {
   }
   async function rejectUser(uid) {
     const u = allUsers.find(x=>x.uid===uid);
-    await updateDoc(doc(db,"users",uid), { role:"pending", assignedSupId:"" });
+    // Delete the document entirely so they vanish from the list immediately.
+    // If they log in again, App.jsx recreates them as pending automatically.
+    await deleteDoc(doc(db,"users",uid));
     await logAdmin(u?.name||u?.email||"—", "Rechazó solicitud");
   }
   async function removeUser(uid) {
@@ -275,7 +277,6 @@ export default function Admin({ user }) {
     { id:"dashboard", icon:"📊", label:"Panel" },
     { id:"settings",  icon:"⚙️", label:"Settings" },
     { id:"checklist", icon:"📋", label:"Checklist" },
-    { id:"users",     icon:"👥", label:"Usuarios", badge: pendingCount + pendingSugg.length },
     { id:"history",   icon:"📜", label:"Historial" },
     { id:"exports",   icon:"📤", label:"Exportar" },
   ];
