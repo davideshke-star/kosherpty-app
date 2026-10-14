@@ -157,7 +157,7 @@ export default function ChecklistModal({ items, checkInTime, existingData, isEdi
         <div style={{ padding:"12px 20px 24px", flexShrink:0, borderTop:"1px solid #F1F5F9" }}>
           <button onClick={handleSave} disabled={!canSave}
             style={{ width:"100%", padding:"14px", fontSize:15, fontWeight:700, background:canSave?"linear-gradient(135deg,#1D4ED8,#1E40AF)":"#E5E7EB", color:canSave?"#fff":"#9CA3AF", border:"none", borderRadius:13, cursor:canSave?"pointer":"not-allowed", boxShadow:canSave?"0 4px 12px rgba(29,78,216,.3)":"none" }}>
-            {isEditing ? "Guardar cambios" : "Completar visita"}
+            {isEditing ? "Guardar cambios" : "Guardar checklist"}
           </button>
         </div>
       </div>

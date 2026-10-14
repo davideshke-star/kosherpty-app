@@ -1,6 +1,9 @@
 export const APP_NAME    = "Kosher Shevet Ahim";
 export const APP_SUB     = "Gestión de Rutas";
 export const ADMIN_EMAIL = "davideshke@gmail.com";
+// Public production URL — QR codes always point here so a printed QR opens the
+// live app no matter where it was generated or who scans it.
+export const APP_URL     = "https://kosherpty-app.vercel.app";
 
 export const COLORS = ["#1D4ED8","#059669","#D97706","#DC2626","#7C3AED","#0891B2","#DB2777","#65A30D"];
 
@@ -92,7 +95,15 @@ export const lastSaturdayCutoff = () => {
 export const initials = n => (n||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
 export const minAgo = t => {
   if(!t) return 0;
-  const [h,m]=t.split(":").map(Number), now=new Date(), then=new Date();
+  // Robust to "HH:MM" (24h) and "H:MM a.m./p.m." (12h) — the app now stores 12h.
+  const match = String(t).match(/(\d{1,2}):(\d{2})/);
+  if(!match) return 0;
+  let h = parseInt(match[1],10);
+  const m = parseInt(match[2],10);
+  const lower = String(t).toLowerCase();
+  if(lower.includes("p") && h < 12) h += 12;      // p.m.
+  if(lower.includes("a") && h === 12) h = 0;       // 12 a.m. → 0
+  const now=new Date(), then=new Date();
   then.setHours(h,m,0,0);
   return Math.floor((now-then)/60000);
 };

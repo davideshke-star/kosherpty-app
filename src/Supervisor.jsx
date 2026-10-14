@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { signOut } from "firebase/auth";
 import {
   doc, getDoc, collection, onSnapshot,
@@ -77,9 +77,18 @@ export default function Supervisor({ user }) {
   const [clModal, setClModal]   = useState(null);
   const [confirm, setConfirm]   = useState(null);
   const [sugForm, setSugForm]   = useState({});
+  const [toast,   setToast]     = useState(null); // { type:"success"|"error", msg }
+  const scanProcessed = useRef(false);
 
   const TODAY     = todayName();
   const TODAY_ISO = todayISO();
+
+  // Auto-dismiss the toast banner
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   useEffect(() => {
     const unsub = subscribeGlobalChecklist(items => setChecklistItems(items));
@@ -113,6 +122,22 @@ export default function Supervisor({ user }) {
     return () => unsub();
   }, [user.uid]);
 
+  // When the app is opened from a QR (…/?scan=<stopId>), process it once the
+  // supervisor's stops are loaded, then strip the param so a refresh won't repeat it.
+  useEffect(() => {
+    if (loading || !supData || stops.length === 0) return;
+    if (scanProcessed.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const scanId = params.get("scan");
+    if (!scanId) return;
+    scanProcessed.current = true;
+    handleScan(scanId);
+    params.delete("scan");
+    const newUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
+    window.history.replaceState({}, "", newUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, supData, stops]);
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   const upStop = (id, data) => updateDoc(doc(db,"supervisors",supData.id,"stops",id), data);
   const log    = (place, action) => addDoc(collection(db,"history"), {
@@ -136,7 +161,7 @@ export default function Supervisor({ user }) {
     const t = nowStr();
     const stop = stops.find(s=>s.id===stopId);
     const visits = [...(stop.visits||[])];
-    visits[vIdx] = { ...visits[vIdx], status:"in-progress", checkIn:t };
+    visits[vIdx] = { ...visits[vIdx], status:"in-progress", checkIn:t, checkInTs:Date.now() };
     await upStop(stopId, { status:"in-progress", visits });
   }
 
@@ -151,22 +176,87 @@ export default function Supervisor({ user }) {
     setConfirm(null);
   }
 
-  async function completeVisit(stopId, vIdx, data) {
+  // Saves the checklist for an IN-PROGRESS visit without closing it. The visit
+  // stays in-progress until the supervisor scans out (or taps "Marcar salida").
+  // checkOut is deliberately left untouched here.
+  async function saveChecklistInProgress(stopId, vIdx, data) {
     const stop = stops.find(s=>s.id===stopId);
     const visits = [...(stop.visits||[])];
     visits[vIdx] = {
       ...visits[vIdx],
-      status:"done",
-      checkIn:   visits[vIdx].checkIn, // never overwrite — set at Iniciar
-      checkOut:  data.checkOut,
+      status:"in-progress",
+      checkIn:   visits[vIdx].checkIn, // never overwrite — set on entry
       checklist: data.checklist,
       generalNotes: data.generalNotes,
       date:      TODAY_ISO,
-      checkInEdited:false, checkOutEdited:false,
     };
-    await upStop(stopId, { status:"done", visits });
-    await log(stop.place, data.checklist.some(c=>c.result==="issue") ? "Completado con observaciones" : "Completado");
+    await upStop(stopId, { status:"in-progress", visits });
+    await log(stop.place, data.checklist.some(c=>c.result==="issue") ? "Checklist guardado (con observaciones)" : "Checklist guardado");
     setClModal(null);
+    setToast({ type:"success", msg:`Checklist guardado — ${stop.place}. Falta registrar la salida.` });
+  }
+
+  // Records the departure time and completes the visit.
+  async function markExit(stopId, vIdx) {
+    const stop = stops.find(s=>s.id===stopId);
+    const visits = [...(stop.visits||[])];
+    const t = nowStr();
+    visits[vIdx] = { ...visits[vIdx], status:"done", checkOut:t };
+    await upStop(stopId, { status:"done", visits });
+    await log(stop.place, "Salida registrada");
+    setToast({ type:"success", msg:`Salida registrada — ${stop.place} · ${t}` });
+  }
+
+  function handleManualExit(stop, vIdx) {
+    const visit = (stop.visits||[])[vIdx];
+    if (!visit?.checklist) {
+      if (!confirm("Aún no has guardado el checklist de esta visita. ¿Registrar la salida de todas formas?")) return;
+    }
+    markExit(stop.id, vIdx);
+  }
+
+  // Central handler for a QR scan (?scan=<stopId>). Decides entry vs exit from
+  // the stop's current state: an in-progress visit → exit; otherwise → entry.
+  async function handleScan(stopId) {
+    const stop = stops.find(s => s.id === stopId);
+    if (!stop) {
+      setToast({ type:"error", msg:"Ese código QR no corresponde a ninguna parada de tu ruta." });
+      return;
+    }
+    const visits = stop.visits || [];
+    const inProgIdx = visits.findIndex(v => v.status === "in-progress");
+    const t = nowStr();
+
+    if (inProgIdx >= 0) {
+      // Guard: ignore an accidental second scan within 20s of entering.
+      const ts = visits[inProgIdx].checkInTs;
+      if (ts && Date.now() - ts < 20000) {
+        setToast({ type:"error", msg:`Acabas de registrar tu entrada en ${stop.place}. Para la salida, escanea de nuevo en un momento.` });
+        setTab("route");
+        return;
+      }
+      // EXIT
+      const nv = [...visits];
+      const hadChecklist = !!nv[inProgIdx].checklist;
+      nv[inProgIdx] = { ...nv[inProgIdx], status:"done", checkOut:t };
+      await upStop(stopId, { status:"done", visits:nv });
+      await log(stop.place, "Salida registrada por QR");
+      setToast({ type:"success", msg:`Salida registrada — ${stop.place} · ${t}${hadChecklist ? "" : " (sin checklist)"}` });
+    } else {
+      // ENTRY — reuse a not-started "today" visit if one exists, else create one
+      const todayIdx = visits.findIndex(v => v.status === "today");
+      let nv;
+      if (todayIdx >= 0) {
+        nv = [...visits];
+        nv[todayIdx] = { ...nv[todayIdx], status:"in-progress", checkIn:t, checkInTs:Date.now() };
+      } else {
+        nv = [...visits, { idx:visits.length, status:"in-progress", date:TODAY_ISO, checkIn:t, checkInTs:Date.now(), checkOut:null, checklist:null, generalNotes:"", checkInEdited:false, checkOutEdited:false }];
+      }
+      await upStop(stopId, { status:"in-progress", visits:nv });
+      await log(stop.place, "Entrada registrada por QR");
+      setToast({ type:"success", msg:`Entrada registrada — ${stop.place} · ${t}` });
+    }
+    setTab("route");
   }
 
   async function editVisit(stopId, vIdx, data) {
@@ -285,6 +375,19 @@ export default function Supervisor({ user }) {
         </div>
       </div>
 
+      {/* Scan / action feedback toast */}
+      {toast && (
+        <div onClick={()=>setToast(null)}
+          style={{ position:"fixed", top:70, left:"50%", transform:"translateX(-50%)", zIndex:300, width:"calc(100% - 32px)", maxWidth:520,
+                   background: toast.type==="error" ? "#FEF2F2" : "#ECFDF5",
+                   border: `1.5px solid ${toast.type==="error" ? "#FCA5A5" : "#6EE7B7"}`,
+                   color: toast.type==="error" ? "#DC2626" : "#059669",
+                   borderRadius:12, padding:"12px 16px", fontSize:13, fontWeight:600, lineHeight:1.4,
+                   boxShadow:"0 8px 24px rgba(0,0,0,.12)", cursor:"pointer" }}>
+          {toast.type==="error" ? "⚠️ " : "✓ "}{toast.msg}
+        </div>
+      )}
+
       <div style={{ padding:"14px 16px 88px", maxWidth:580, margin:"0 auto" }}>
 
         {/* ── ROUTE TAB ── */}
@@ -298,6 +401,10 @@ export default function Supervisor({ user }) {
               <div style={{ fontSize:24,fontWeight:800,color:"rgba(255,255,255,.9)" }}>
                 {todayCards.length?Math.round(todayDone/todayCards.length*100):0}%
               </div>
+            </div>
+
+            <div style={{ background:"#EFF6FF", border:"1px solid #DBEAFE", borderRadius:12, padding:"10px 12px", marginBottom:14, fontSize:12, color:C.primary, lineHeight:1.5 }}>
+              📷 <b>Escanea el código QR</b> del local con la cámara de tu teléfono al <b>llegar</b> (registra la entrada) y al <b>salir</b> (registra la salida). Si no hay QR, usa los botones Iniciar y Marcar salida.
             </div>
 
             {todayCards.length > 0 && (
@@ -342,14 +449,21 @@ export default function Supervisor({ user }) {
                           <button onClick={()=>startVisit(stop.id,vIdx)} style={{ ...btn({background:C.primary,color:"#fff",padding:"9px 20px",fontSize:14,boxShadow:`0 2px 8px ${C.primary}44`}) }}>▶ Iniciar</button>
                         )}
                         {isInProg&&<>
+                          <button onClick={()=>setClModal({stopId:stop.id,visitIdx:vIdx,mode:"new",items})} style={{ ...btn({background:C.primaryLight,color:C.primary,padding:"9px 14px",fontSize:13}) }}>📋 {visit.checklist?"Editar checklist":"Checklist"}</button>
+                          <button onClick={()=>handleManualExit(stop,vIdx)} style={{ ...btn({background:"#ECFDF5",color:"#059669",padding:"9px 14px",fontSize:13,border:"1px solid #6EE7B7"}) }}>✓ Marcar salida</button>
                           <button onClick={()=>setConfirm({stopId:stop.id,visitIdx:vIdx})} style={{ ...btn({background:"#FEF2F2",color:"#DC2626",padding:"9px 14px",fontSize:13,border:"1px solid #FCA5A5"}) }}>🔒 Cerrado</button>
-                          <button onClick={()=>setClModal({stopId:stop.id,visitIdx:vIdx,mode:"new",items})} style={{ ...btn({background:C.primaryLight,color:C.primary,padding:"9px 14px",fontSize:13}) }}>📋 Checklist</button>
                         </>}
                         {isDone&&<>
                           <button onClick={()=>setClModal({stopId:stop.id,visitIdx:vIdx,mode:"edit",items})} style={{ ...btn({background:"#F4F6F9",color:C.muted,padding:"8px 14px",fontSize:13,border:"1px solid #E4E9F0"}) }}>✏️ Editar{totalVisits>1?` #${vIdx+1}`:""}</button>
                           {isLast&&<button onClick={()=>addNextVisit(stop.id)} style={{ ...btn({background:"#ECFDF5",color:"#059669",padding:"8px 14px",fontSize:13}) }}>+ {totalVisits===1?"2ª visita":totalVisits===2?"3ª visita":`Visita #${totalVisits+1}`}</button>}
                         </>}
                       </div>
+
+                      {isInProg && (
+                        <div style={{ fontSize:11, color:C.warning, background:C.warningLight, borderRadius:8, padding:"6px 10px", marginTop:8, lineHeight:1.4 }}>
+                          ⏳ Falta registrar la salida — escanea el QR del local al salir, o toca <b>Marcar salida</b>.
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -466,7 +580,7 @@ export default function Supervisor({ user }) {
             checkInTime={!isEdit?visit?.checkIn:null}
             existingData={isEdit?visit:null}
             isEditing={isEdit}
-            onSave={data=>isEdit?editVisit(clModal.stopId,clModal.visitIdx,data):completeVisit(clModal.stopId,clModal.visitIdx,data)}
+            onSave={data=>isEdit?editVisit(clModal.stopId,clModal.visitIdx,data):saveChecklistInProgress(clModal.stopId,clModal.visitIdx,data)}
             onCancel={()=>setClModal(null)}
           />
         );

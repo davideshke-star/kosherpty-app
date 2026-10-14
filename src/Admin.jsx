@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { signOut } from "firebase/auth";
 import {
   collection, doc, onSnapshot, setDoc, updateDoc,
@@ -14,6 +14,7 @@ import { getGlobalChecklist, saveGlobalChecklist } from "./checklistStore";
 import { buildWeeklyReportText } from "./reportBuilder";
 import VisitDetailModal from "./VisitDetailModal";
 import ChecklistEditorModal from "./ChecklistEditorModal";
+import QRCodeModal from "./QRCodeModal";
 
 function Badge({ status }) {
   const st = STATUS[status] || STATUS.pending;
@@ -80,6 +81,9 @@ export default function Admin({ user }) {
   const [form,          setForm]          = useState({});
   const [detailVisit,   setDetailVisit]   = useState(null);
   const [stopChecklistEditor, setStopChecklistEditor] = useState(null);
+  const [qrModal, setQrModal] = useState(null); // { stop, supervisorName }
+  const [scanInfo, setScanInfo] = useState(null); // admin QR-test confirmation
+  const scanChecked = useRef(false);
 
   // ── Firestore listeners ───────────────────────────────────────────────────
   useEffect(() => {
@@ -130,6 +134,27 @@ export default function Admin({ user }) {
     check();
     const t = setInterval(check, 60000);
     return () => clearInterval(t);
+  }, [routes, supervisors]);
+
+  // Admin QR-test aid: if the admin opens a …/?scan=<stopId> link, identify which
+  // establishment it maps to (without changing any state — recording only happens
+  // for supervisors). Lets David verify the QR pipeline with his own account.
+  useEffect(() => {
+    if (scanChecked.current) return;
+    const scanId = new URLSearchParams(window.location.search).get("scan");
+    if (!scanId) return;
+    const allStops = Object.entries(routes).flatMap(([supId, list]) =>
+      (list||[]).map(st => ({ ...st, supId })));
+    const match = allStops.find(st => st.id === scanId);
+    if (!match && allStops.length === 0) return; // routes not loaded yet; wait
+    scanChecked.current = true;
+    const supName = supervisors.find(s => s.id === match?.supId)?.name || "—";
+    setScanInfo(match
+      ? { ok:true, place:match.place, supName }
+      : { ok:false });
+    const params = new URLSearchParams(window.location.search);
+    params.delete("scan");
+    window.history.replaceState({}, "", window.location.pathname + (params.toString() ? "?"+params.toString() : ""));
   }, [routes, supervisors]);
 
   // ── History logging for admin's own actions ──────────────────────────────
@@ -294,9 +319,10 @@ export default function Admin({ user }) {
           <LogoIcon size={32}/><LogoText/>
         </div>
         <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-          {pendingCount>0 && (
-            <button onClick={()=>setTab("users")} style={{ ...btn({ background:"#EFF6FF", color:C.primary, padding:"6px 11px", fontSize:12 }) }}>👥 {pendingCount}</button>
-          )}
+          <button onClick={()=>setTab("users")} style={{ ...btn({ background:tab==="users"?C.primary:"#EFF6FF", color:tab==="users"?"#fff":C.primary, padding:"6px 11px", fontSize:12, position:"relative" }) }}>
+            👥{pendingCount>0?` ${pendingCount}`:""}
+            {pendingCount>0 && <span style={{ position:"absolute", top:-4, right:-4, width:8, height:8, borderRadius:"50%", background:"#DC2626" }}/>}
+          </button>
           {alerts.length>0 && (
             <button onClick={()=>openModal("alerts")} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"6px 11px", fontSize:12 }) }}>🔔 {alerts.length}</button>
           )}
@@ -464,6 +490,7 @@ export default function Admin({ user }) {
                       <div style={{ width:6, height:6, borderRadius:"50%", background:STATUS[st.status]?.color||"#D1D5DB", flexShrink:0 }}/>
                       <span style={{ flex:1, fontSize:12, color:C.text, fontWeight:500 }}>{i+1}. {st.place}{st.customChecklist?.length>0&&<span style={{ color:C.primary }}> 📋</span>}</span>
                       <span style={{ fontSize:11, color:C.muted }}>{st.address}</span>
+                      <button onClick={()=>setQrModal({ stop:st, supervisorName:s.name })} title="Código QR" style={{ ...btn({ background:"none", color:C.text, padding:"2px 6px", fontSize:13 }) }}>🔳</button>
                       <button onClick={()=>openStopChecklistEditor(s.id,st.id,st.place,st.customChecklist)} title="Checklist personalizado" style={{ ...btn({ background:"none", color:C.primary, padding:"2px 6px", fontSize:13 }) }}>📋</button>
                       <button onClick={()=>openModal("editStop",{supId:s.id,stopId:st.id,place:st.place,address:st.address})} style={{ ...btn({ background:"none", color:C.muted, padding:"2px 6px", fontSize:12 }) }}>✎</button>
                       <button onClick={()=>deleteStop(s.id,st.id)} style={{ ...btn({ background:"none", color:"#DC2626", padding:"2px 6px", fontSize:12 }) }}>🗑</button>
@@ -726,6 +753,38 @@ export default function Admin({ user }) {
           totalVisits={detailVisit.totalVisits}
           onClose={()=>setDetailVisit(null)}
         />
+      )}
+
+      {qrModal && (
+        <QRCodeModal
+          stop={qrModal.stop}
+          supervisorName={qrModal.supervisorName}
+          onClose={()=>setQrModal(null)}
+        />
+      )}
+
+      {scanInfo && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:450, padding:20 }} onClick={()=>setScanInfo(null)}>
+          <div style={{ background:"#fff", borderRadius:18, padding:24, width:"100%", maxWidth:360, textAlign:"center" }} onClick={e=>e.stopPropagation()}>
+            <div style={{ fontSize:34, marginBottom:8 }}>{scanInfo.ok ? "✅" : "⚠️"}</div>
+            {scanInfo.ok ? (
+              <>
+                <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>QR válido</div>
+                <div style={{ fontSize:14, color:C.text, marginBottom:2 }}>{scanInfo.place}</div>
+                <div style={{ fontSize:12, color:C.muted, marginBottom:16 }}>Ruta de {scanInfo.supName}</div>
+                <div style={{ fontSize:12, color:C.muted, background:"#F8FAFC", borderRadius:10, padding:"10px 12px", lineHeight:1.5 }}>
+                  El pipeline funciona. Iniciaste sesión como <b>admin</b>, así que esto no registra entrada/salida. Como <b>supervisor</b>, este escaneo registraría el horario automáticamente.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:8 }}>QR no reconocido</div>
+                <div style={{ fontSize:13, color:C.muted, lineHeight:1.5 }}>El código no corresponde a ninguna parada registrada.</div>
+              </>
+            )}
+            <button onClick={()=>setScanInfo(null)} style={{ ...btn({ background:C.primary, color:"#fff", padding:"11px", width:"100%", fontSize:14, marginTop:16 }) }}>Entendido</button>
+          </div>
+        </div>
       )}
     </div>
   );
