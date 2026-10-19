@@ -15,3 +15,6 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db   = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
+// Always show the Google account chooser so a shared device never silently
+// logs in with the wrong account (e.g. a supervisor account instead of admin).
+googleProvider.setCustomParameters({ prompt: "select_account" });
