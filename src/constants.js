@@ -20,6 +20,7 @@ export const C = {
   danger:       "#DC2626",
   dangerLight:  "#FEF2F2",
   purple:       "#7C3AED",
+  purpleLight:  "#F5F3FF",
   text:         "#0F172A",
   muted:        "#6B7280",
   subtle:       "#9CA3AF",
@@ -93,6 +94,17 @@ export const lastSaturdayCutoff = () => {
 };
 
 export const initials = n => (n||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+
+// Normalizes an establishment name for QR matching: lowercase, no accents,
+// collapsed whitespace. A QR encodes this form so one physical code works for
+// everyone (supervisor + mashguijim) who has that establishment in their route.
+export const normalizeName = s => (s||"")
+  .toString().normalize("NFD").replace(/[̀-ͯ]/g,"")
+  .toLowerCase().replace(/\s+/g," ").trim();
+
+// The URL a QR encodes, by establishment name.
+export const estQrUrl = place => `${APP_URL}/?est=${encodeURIComponent(normalizeName(place))}`;
+
 export const minAgo = t => {
   if(!t) return 0;
   // Robust to "HH:MM" (24h) and "H:MM a.m./p.m." (12h) — the app now stores 12h.

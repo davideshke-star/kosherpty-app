@@ -5,7 +5,7 @@ import {
   updateDoc, addDoc, query, orderBy, writeBatch
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { C, STATUS, btn, nowStr, todayName, todayISO } from "./constants";
+import { C, STATUS, btn, nowStr, todayName, todayISO, normalizeName } from "./constants";
 import { LogoIcon, LogoText } from "./Logo";
 import { subscribeGlobalChecklist, resolveChecklist } from "./checklistStore";
 import ChecklistModal from "./ChecklistModal";
@@ -122,17 +122,17 @@ export default function Supervisor({ user }) {
     return () => unsub();
   }, [user.uid]);
 
-  // When the app is opened from a QR (…/?scan=<stopId>), process it once the
+  // When the app is opened from a QR (…/?est=<establishment>), process it once the
   // supervisor's stops are loaded, then strip the param so a refresh won't repeat it.
   useEffect(() => {
     if (loading || !supData || stops.length === 0) return;
     if (scanProcessed.current) return;
     const params = new URLSearchParams(window.location.search);
-    const scanId = params.get("scan");
-    if (!scanId) return;
+    const estName = params.get("est");
+    if (!estName) return;
     scanProcessed.current = true;
-    handleScan(scanId);
-    params.delete("scan");
+    handleScan(estName);
+    params.delete("est");
     const newUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
     window.history.replaceState({}, "", newUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,12 +215,13 @@ export default function Supervisor({ user }) {
     markExit(stop.id, vIdx);
   }
 
-  // Central handler for a QR scan (?scan=<stopId>). Decides entry vs exit from
+  // Central handler for a QR scan (?est=<establishment>). Decides entry vs exit from
   // the stop's current state: an in-progress visit → exit; otherwise → entry.
-  async function handleScan(stopId) {
-    const stop = stops.find(s => s.id === stopId);
+  async function handleScan(estName) {
+    const target = normalizeName(estName);
+    const stop = stops.find(s => normalizeName(s.place) === target);
     if (!stop) {
-      setToast({ type:"error", msg:"Ese código QR no corresponde a ninguna parada de tu ruta." });
+      setToast({ type:"error", msg:"Ese código QR no corresponde a ningún establecimiento de tu ruta." });
       return;
     }
     const visits = stop.visits || [];
@@ -239,7 +240,7 @@ export default function Supervisor({ user }) {
       const nv = [...visits];
       const hadChecklist = !!nv[inProgIdx].checklist;
       nv[inProgIdx] = { ...nv[inProgIdx], status:"done", checkOut:t };
-      await upStop(stopId, { status:"done", visits:nv });
+      await upStop(stop.id, { status:"done", visits:nv });
       await log(stop.place, "Salida registrada por QR");
       setToast({ type:"success", msg:`Salida registrada — ${stop.place} · ${t}${hadChecklist ? "" : " (sin checklist)"}` });
     } else {
@@ -252,7 +253,7 @@ export default function Supervisor({ user }) {
       } else {
         nv = [...visits, { idx:visits.length, status:"in-progress", date:TODAY_ISO, checkIn:t, checkInTs:Date.now(), checkOut:null, checklist:null, generalNotes:"", checkInEdited:false, checkOutEdited:false }];
       }
-      await upStop(stopId, { status:"in-progress", visits:nv });
+      await upStop(stop.id, { status:"in-progress", visits:nv });
       await log(stop.place, "Entrada registrada por QR");
       setToast({ type:"success", msg:`Entrada registrada — ${stop.place} · ${t}` });
     }

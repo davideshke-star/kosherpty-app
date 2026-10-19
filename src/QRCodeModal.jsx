@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import QRCode from "qrcode";
-import { C, btn, APP_URL } from "./constants";
+import { C, btn, estQrUrl } from "./constants";
 
 // Shows a printable QR for one establishment. Scanning it opens the live app
-// with ?scan=<stopId>, which records the supervisor's entry/exit automatically.
+// with ?est=<establishment>, which records entry/exit for whoever scans —
+// so one physical QR works for the supervisor and any mashguijim who share it.
 export default function QRCodeModal({ stop, supervisorName, onClose }) {
   const [dataUrl, setDataUrl] = useState("");
-  const scanUrl = `${APP_URL}/?scan=${stop.id}`;
+  const scanUrl = estQrUrl(stop.place);
 
   useEffect(() => {
     QRCode.toDataURL(scanUrl, { width: 520, margin: 2, errorCorrectionLevel: "M" })

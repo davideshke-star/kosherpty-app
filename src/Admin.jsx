@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import QRCode from "qrcode";
 import { signOut } from "firebase/auth";
 import {
   collection, doc, onSnapshot, setDoc, updateDoc,
@@ -7,7 +8,7 @@ import {
 import { auth, db } from "./firebase";
 import {
   APP_NAME, APP_SUB, C, COLORS, STATUS, btn,
-  nowStr, dateStr, weekRange, initials, minAgo
+  nowStr, dateStr, weekRange, initials, minAgo, normalizeName, estQrUrl
 } from "./constants";
 import { LogoIcon, LogoText } from "./Logo";
 import { getGlobalChecklist, saveGlobalChecklist } from "./checklistStore";
@@ -136,24 +137,25 @@ export default function Admin({ user }) {
     return () => clearInterval(t);
   }, [routes, supervisors]);
 
-  // Admin QR-test aid: if the admin opens a …/?scan=<stopId> link, identify which
-  // establishment it maps to (without changing any state — recording only happens
-  // for supervisors). Lets David verify the QR pipeline with his own account.
+  // Admin QR-test aid: if the admin opens a …/?est=<establishment> link, identify
+  // which establishment it maps to and who has it in their route (without changing
+  // any state — recording only happens for supervisors/mashguijim).
   useEffect(() => {
     if (scanChecked.current) return;
-    const scanId = new URLSearchParams(window.location.search).get("scan");
-    if (!scanId) return;
+    const estName = new URLSearchParams(window.location.search).get("est");
+    if (!estName) return;
+    const target = normalizeName(estName);
     const allStops = Object.entries(routes).flatMap(([supId, list]) =>
       (list||[]).map(st => ({ ...st, supId })));
-    const match = allStops.find(st => st.id === scanId);
-    if (!match && allStops.length === 0) return; // routes not loaded yet; wait
+    const matches = allStops.filter(st => normalizeName(st.place) === target);
+    if (matches.length === 0 && allStops.length === 0) return; // routes not loaded yet
     scanChecked.current = true;
-    const supName = supervisors.find(s => s.id === match?.supId)?.name || "—";
-    setScanInfo(match
-      ? { ok:true, place:match.place, supName }
+    const whoNames = [...new Set(matches.map(m => supervisors.find(s => s.id === m.supId)?.name).filter(Boolean))];
+    setScanInfo(matches.length
+      ? { ok:true, place:matches[0].place, who:whoNames }
       : { ok:false });
     const params = new URLSearchParams(window.location.search);
-    params.delete("scan");
+    params.delete("est");
     window.history.replaceState({}, "", window.location.pathname + (params.toString() ? "?"+params.toString() : ""));
   }, [routes, supervisors]);
 
@@ -177,17 +179,107 @@ export default function Admin({ user }) {
   // ── Supervisor CRUD ───────────────────────────────────────────────────────
   async function addSupervisor() {
     if (!form.name?.trim()) return;
+    const tier = form.tier === "mashgiaj" ? "mashgiaj" : "supervisor";
     const ref = doc(collection(db,"supervisors"));
-    await setDoc(ref, { name:form.name.trim(), avatar:initials(form.name), color:form.color||COLORS[0], email:form.email||"", createdAt:Date.now() });
+    await setDoc(ref, { name:form.name.trim(), avatar:initials(form.name), color:form.color||COLORS[0], email:form.email||"", tier, createdAt:Date.now() });
     setRoutes(prev => ({ ...prev, [ref.id]:[] }));
-    await logAdmin(form.name.trim(), "Agregó supervisor");
+    await logAdmin(form.name.trim(), tier==="mashgiaj" ? "Agregó mashgiaj" : "Agregó supervisor");
     closeModal();
   }
 
   async function editSupervisor() {
-    await updateDoc(doc(db,"supervisors",form.id), { name:form.name.trim(), avatar:initials(form.name), color:form.color, email:form.email||"" });
-    await logAdmin(form.name.trim(), "Editó supervisor");
+    const tier = form.tier === "mashgiaj" ? "mashgiaj" : "supervisor";
+    await updateDoc(doc(db,"supervisors",form.id), { name:form.name.trim(), avatar:initials(form.name), color:form.color, email:form.email||"", tier });
+    await logAdmin(form.name.trim(), "Editó " + (tier==="mashgiaj" ? "mashgiaj" : "supervisor"));
     closeModal();
+  }
+
+  // One-time setup: creates the four mashguijim with their routes. Idempotent —
+  // skips any that already exist (by name + mashgiaj tier). Copies each stop's
+  // address from an existing same-named establishment when one is found.
+  async function seedMashguijim() {
+    const plan = [
+      { name:"Matti",            places:["Grilla","Olivetta"] },
+      { name:"Bernie",           places:["Grilla","Olivetta"] },
+      { name:"Yaakov Dayan",     places:["Kava","Aria"] },
+      { name:"Isaac Benzaquen",  places:["Kava","Aria"] },
+    ];
+    const existingMash = supervisors.filter(s => s.tier === "mashgiaj").map(s => normalizeName(s.name));
+    const toCreate = plan.filter(p => !existingMash.includes(normalizeName(p.name)));
+    if (toCreate.length === 0) { alert("Los mashguijim ya están creados."); return; }
+    if (!confirm(`Se crearán ${toCreate.length} mashguijim con sus rutas:\n${toCreate.map(p=>`• ${p.name}: ${p.places.join(", ")}`).join("\n")}\n\n¿Continuar?`)) return;
+
+    // Build a name → address lookup from all existing stops
+    const addrByName = {};
+    Object.values(routes).flat().forEach(st => {
+      const k = normalizeName(st.place);
+      if (st.address && !addrByName[k]) addrByName[k] = st.address;
+    });
+
+    for (let i = 0; i < toCreate.length; i++) {
+      const p = toCreate[i];
+      const ref = doc(collection(db,"supervisors"));
+      await setDoc(ref, {
+        name: p.name, avatar: initials(p.name),
+        color: COLORS[(4 + i) % COLORS.length],
+        email: "", tier: "mashgiaj", createdAt: Date.now(),
+      });
+      for (let j = 0; j < p.places.length; j++) {
+        await addDoc(collection(db,"supervisors",ref.id,"stops"), {
+          place: p.places[j],
+          address: addrByName[normalizeName(p.places[j])] || "",
+          status: "pending", visits: [], alertSent: false, order: j,
+        });
+      }
+      await logAdmin(p.name, "Creado como mashgiaj (setup)");
+    }
+    alert(`Listo. Se crearon ${toCreate.length} mashguijim.`);
+  }
+
+  // Generates and prints one QR per unique establishment across ALL routes
+  // (supervisors + mashguijim), deduped by normalized name.
+  async function printAllQRs() {
+    const byName = {};
+    Object.values(routes).flat().forEach(st => {
+      const k = normalizeName(st.place);
+      if (k && !byName[k]) byName[k] = st.place; // keep first display spelling
+    });
+    const names = Object.values(byName).sort((a,b)=>a.localeCompare(b));
+    if (names.length === 0) { alert("No hay establecimientos con paradas todavía."); return; }
+
+    const cards = await Promise.all(names.map(async place => {
+      const url = estQrUrl(place);
+      const img = await QRCode.toDataURL(url, { width: 380, margin: 2, errorCorrectionLevel: "M" });
+      return { place, img };
+    }));
+
+    const w = window.open("", "_blank");
+    if (!w) { alert("Permite ventanas emergentes para imprimir."); return; }
+    const cardsHtml = cards.map(c => `
+      <div class="card">
+        <div class="kicker">Kosher Shevet Ahim</div>
+        <div class="place">${c.place}</div>
+        <img src="${c.img}" alt="QR"/>
+        <div class="hint">Escanea al llegar y al salir</div>
+      </div>`).join("");
+    w.document.write(`
+      <html><head><title>Códigos QR — ${names.length} establecimientos</title>
+      <style>
+        * { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; box-sizing:border-box; }
+        body { margin:0; padding:16px; }
+        .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
+        .card { border:2px solid #1D4ED8; border-radius:18px; padding:18px 14px; text-align:center; page-break-inside:avoid; }
+        .kicker { font-size:10px; font-weight:700; color:#1D4ED8; text-transform:uppercase; letter-spacing:1.5px; }
+        .place { font-size:19px; font-weight:800; color:#0F172A; margin:6px 0 10px; }
+        img { width:210px; height:210px; }
+        .hint { font-size:12px; color:#374151; margin-top:8px; }
+        @media print { .card { border-color:#1D4ED8; } }
+      </style></head>
+      <body>
+        <div class="grid">${cardsHtml}</div>
+        <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
+      </body></html>`);
+    w.document.close();
   }
 
   async function deleteSupervisor(id) {
@@ -290,6 +382,10 @@ export default function Admin({ user }) {
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const sup = selectedSup ? supervisors.find(s=>s.id===selectedSup) : null;
+  // Supervisors first, then mashguijim — keeps their org hierarchy visible.
+  const tierRank = t => (t === "mashgiaj" ? 1 : 0);
+  const displaySupervisors = [...supervisors].sort((a,b)=>tierRank(a.tier)-tierRank(b.tier));
+  const MashChip = () => <span style={{ fontSize:9, fontWeight:700, color:C.purple, background:C.purpleLight||"#F5F3FF", borderRadius:5, padding:"1px 7px", textTransform:"uppercase", letterSpacing:.5 }}>Mashgiaj</span>;
   const pendingCount = allUsers.filter(u=>u.role==="pending").length;
   const adminList = allUsers.filter(u=>u.role==="admin");
   const supervisorUsers = allUsers.filter(u=>u.role==="supervisor");
@@ -337,7 +433,7 @@ export default function Admin({ user }) {
           <>
             <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:10 }}>{weekRange()}</div>
             {supervisors.length===0 && <div style={{ textAlign:"center", color:C.muted, padding:48 }}>No hay supervisores. Ve a ⚙️ Settings.</div>}
-            {supervisors.map(s => {
+            {displaySupervisors.map(s => {
               const p       = getProgress(s.id);
               const stops   = routes[s.id]||[];
               const inProg  = stops.find(x=>x.status==="in-progress");
@@ -350,7 +446,10 @@ export default function Admin({ user }) {
                   <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                     <div style={{ width:44, height:44, borderRadius:12, background:s.color, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:15, color:"#fff", flexShrink:0 }}>{s.avatar}</div>
                     <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:700, fontSize:15, color:C.text }}>{s.name}</div>
+                      <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                        <div style={{ fontWeight:700, fontSize:15, color:C.text }}>{s.name}</div>
+                        {s.tier==="mashgiaj" && <MashChip/>}
+                      </div>
                       <div style={{ fontSize:12, color:inProg?C.warning:C.muted, fontWeight:500, marginTop:2 }}>
                         {hasAlert?"🔴 Atraso detectado":inProg?`En: ${inProg.place}`:p.done===p.total&&p.total>0?"✅ Semana completa":`${p.done}/${p.total} completadas`}
                       </div>
@@ -468,21 +567,32 @@ export default function Admin({ user }) {
         {/* ── SETTINGS ── */}
         {tab==="settings" && (
           <>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-              <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Supervisores</div>
-              <button onClick={()=>openModal("addSup")} style={{ ...btn({ background:C.primary, color:"#fff", padding:"9px 16px", fontSize:13 }) }}>+ Agregar</button>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, flexWrap:"wrap", gap:8 }}>
+              <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Equipo</div>
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={()=>openModal("addSup",{tier:"supervisor"})} style={{ ...btn({ background:C.primary, color:"#fff", padding:"9px 14px", fontSize:13 }) }}>+ Supervisor</button>
+                <button onClick={()=>openModal("addSup",{tier:"mashgiaj"})} style={{ ...btn({ background:C.purpleLight||"#F5F3FF", color:C.purple, padding:"9px 14px", fontSize:13 }) }}>+ Mashgiaj</button>
+              </div>
             </div>
-            {supervisors.map(s => {
+            {supervisors.filter(s=>s.tier==="mashgiaj").length===0 && (
+              <button onClick={seedMashguijim} style={{ ...btn({ background:"#FFFBEB", color:"#D97706", padding:"11px 14px", fontSize:13, width:"100%", marginBottom:14, border:"1px solid #FDE68A" }) }}>
+                ⚡ Crear los 4 mashguijim con sus rutas (Matti, Bernie, Dayan, Benzaquen)
+              </button>
+            )}
+            {displaySupervisors.map(s => {
               const stops = routes[s.id]||[];
               return (
                 <div key={s.id} style={{ background:"#fff", borderRadius:16, padding:16, marginBottom:10, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
                     <div style={{ width:40, height:40, borderRadius:10, background:s.color, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#fff", fontSize:13 }}>{s.avatar}</div>
                     <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:700, color:C.text }}>{s.name}</div>
+                      <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                        <div style={{ fontWeight:700, color:C.text }}>{s.name}</div>
+                        {s.tier==="mashgiaj" && <MashChip/>}
+                      </div>
                       <div style={{ fontSize:11, color:C.muted }}>{stops.length} paradas · {s.email||"sin email"}</div>
                     </div>
-                    <button onClick={()=>openModal("editSup",{id:s.id,name:s.name,color:s.color,email:s.email||""})} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"7px 12px", fontSize:12, border:"1px solid #E4E9F0" }) }}>✎</button>
+                    <button onClick={()=>openModal("editSup",{id:s.id,name:s.name,color:s.color,email:s.email||"",tier:s.tier||"supervisor"})} style={{ ...btn({ background:"#F4F6F9", color:C.muted, padding:"7px 12px", fontSize:12, border:"1px solid #E4E9F0" }) }}>✎</button>
                     <button onClick={()=>deleteSupervisor(s.id)} style={{ ...btn({ background:"#FEF2F2", color:"#DC2626", padding:"7px 12px", fontSize:12 }) }}>🗑</button>
                   </div>
                   {stops.map((st,i) => (
@@ -535,7 +645,7 @@ export default function Admin({ user }) {
                   </div>
                   <div style={{ fontSize:11, color:C.muted, marginBottom:8, fontWeight:600 }}>Aprobar como supervisor de:</div>
                   <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
-                    {supervisors.map(s => <button key={s.id} onClick={()=>approveUser(u.uid,s.id)} style={{ ...btn({ background:s.color+"18", color:s.color, padding:"7px 14px", fontSize:13 }) }}>{s.name}</button>)}
+                    {displaySupervisors.map(s => <button key={s.id} onClick={()=>approveUser(u.uid,s.id)} style={{ ...btn({ background:s.color+"18", color:s.color, padding:"7px 14px", fontSize:13 }) }}>{s.name}</button>)}
                   </div>
                   <div style={{ borderTop:"1px solid #F1F5F9", paddingTop:10, display:"flex", gap:6 }}>
                     <button onClick={()=>approveAsAdmin(u.uid)} style={{ ...btn({ background:"#EFF6FF", color:C.primary, padding:"7px 14px", fontSize:13, fontWeight:700 }) }}>👑 Aprobar como Admin</button>
@@ -610,7 +720,7 @@ export default function Admin({ user }) {
             {historyLog.length>0&&(
               <div style={{ marginTop:20 }}>
                 <div style={{ fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:10 }}>Resumen semanal</div>
-                {supervisors.map(s => {const p=getProgress(s.id);const stops=routes[s.id]||[];return(
+                {displaySupervisors.map(s => {const p=getProgress(s.id);const stops=routes[s.id]||[];return(
                   <div key={s.id} style={{ background:"#fff", borderRadius:12, padding:"12px 14px", marginBottom:6, boxShadow:"0 1px 2px rgba(0,0,0,.04)" }}>
                     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
                       <div style={{ fontWeight:700, color:C.text }}>{s.name}</div>
@@ -629,6 +739,14 @@ export default function Admin({ user }) {
         {/* ── EXPORTAR ── */}
         {tab==="exports" && (
           <>
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>Códigos QR</div>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>Un QR por establecimiento. Imprímelos todos de una vez y pégalos en cada local.</div>
+            <button onClick={printAllQRs}
+              style={{ ...btn({ background:C.primary, color:"#fff", padding:"16px 18px", fontSize:14, textAlign:"left", display:"flex", alignItems:"center", gap:12, width:"100%", marginBottom:24 }) }}>
+              <span style={{ fontSize:24 }}>🔳</span>
+              <div><div style={{ fontWeight:700 }}>Imprimir todos los QR</div><div style={{ fontSize:12, color:"rgba(255,255,255,.8)", fontWeight:400, marginTop:2 }}>Uno por cada establecimiento, listos para imprimir</div></div>
+            </button>
+
             <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:14 }}>Exportar datos</div>
             <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:24 }}>
               <button onClick={()=>exportCSV(supervisors,routes)}
@@ -681,7 +799,16 @@ export default function Admin({ user }) {
           <div style={{ background:"#fff", borderRadius:"24px 24px 0 0", padding:24, width:"100%", maxWidth:480, maxHeight:"85vh", overflowY:"auto" }} onClick={e=>e.stopPropagation()}>
 
             {(modal==="addSup"||modal==="editSup") && <>
-              <div style={{ fontWeight:800, color:C.text, fontSize:16, marginBottom:14 }}>{modal==="addSup"?"Nuevo supervisor":"Editar supervisor"}</div>
+              <div style={{ fontWeight:800, color:C.text, fontSize:16, marginBottom:14 }}>{modal==="addSup"?(form.tier==="mashgiaj"?"Nuevo mashgiaj":"Nuevo supervisor"):"Editar"}</div>
+              <label style={LS}>Rol</label>
+              <div style={{ display:"flex", gap:7, marginBottom:12 }}>
+                {[["supervisor","Supervisor"],["mashgiaj","Mashgiaj"]].map(([val,lbl])=>(
+                  <button key={val} onClick={()=>setForm(p=>({...p,tier:val}))}
+                    style={{ ...btn({ flex:1, padding:"9px 4px", fontSize:13, background:(form.tier||"supervisor")===val?(val==="mashgiaj"?C.purple:C.primary):"#F4F6F9", color:(form.tier||"supervisor")===val?"#fff":C.muted, border:`1.5px solid ${(form.tier||"supervisor")===val?(val==="mashgiaj"?C.purple:C.primary):"#E4E9F0"}` }) }}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
               <label style={LS}>Nombre</label>
               <input value={form.name||""} onChange={e=>setForm(p=>({...p,name:e.target.value}))} placeholder="Ej: Ana García" style={IS}/>
               <label style={LS}>Email (opcional)</label>
@@ -771,7 +898,7 @@ export default function Admin({ user }) {
               <>
                 <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>QR válido</div>
                 <div style={{ fontSize:14, color:C.text, marginBottom:2 }}>{scanInfo.place}</div>
-                <div style={{ fontSize:12, color:C.muted, marginBottom:16 }}>Ruta de {scanInfo.supName}</div>
+                <div style={{ fontSize:12, color:C.muted, marginBottom:16 }}>En la ruta de: {scanInfo.who && scanInfo.who.length ? scanInfo.who.join(", ") : "—"}</div>
                 <div style={{ fontSize:12, color:C.muted, background:"#F8FAFC", borderRadius:10, padding:"10px 12px", lineHeight:1.5 }}>
                   El pipeline funciona. Iniciaste sesión como <b>admin</b>, así que esto no registra entrada/salida. Como <b>supervisor</b>, este escaneo registraría el horario automáticamente.
                 </div>
