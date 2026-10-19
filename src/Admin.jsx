@@ -255,28 +255,40 @@ export default function Admin({ user }) {
 
     const w = window.open("", "_blank");
     if (!w) { alert("Permite ventanas emergentes para imprimir."); return; }
-    const cardsHtml = cards.map(c => `
+
+    // Paginate: fixed number of cards per page with a forced page break after
+    // each page, so a card never gets split across two pages.
+    const PER_PAGE = 6; // 2 columns × 3 rows fits comfortably on Letter/A4
+    const cardHtml = c => `
       <div class="card">
         <div class="kicker">Kosher Shevet Ahim</div>
         <div class="place">${c.place}</div>
         <img src="${c.img}" alt="QR"/>
         <div class="hint">Escanea al llegar y al salir</div>
-      </div>`).join("");
+      </div>`;
+    let pagesHtml = "";
+    for (let i = 0; i < cards.length; i += PER_PAGE) {
+      const group = cards.slice(i, i + PER_PAGE);
+      const last = i + PER_PAGE >= cards.length;
+      pagesHtml += `<div class="page"${last ? "" : ' style="page-break-after:always;"'}><div class="grid">${group.map(cardHtml).join("")}</div></div>`;
+    }
+
     w.document.write(`
       <html><head><title>Códigos QR — ${names.length} establecimientos</title>
       <style>
         * { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; box-sizing:border-box; }
-        body { margin:0; padding:16px; }
-        .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
-        .card { border:2px solid #1D4ED8; border-radius:18px; padding:18px 14px; text-align:center; page-break-inside:avoid; }
+        @page { margin: 10mm; }
+        body { margin:0; padding:0; }
+        .page { padding: 4px; }
+        .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+        .card { border:2px solid #1D4ED8; border-radius:16px; padding:14px 12px; text-align:center; break-inside:avoid; page-break-inside:avoid; }
         .kicker { font-size:10px; font-weight:700; color:#1D4ED8; text-transform:uppercase; letter-spacing:1.5px; }
-        .place { font-size:19px; font-weight:800; color:#0F172A; margin:6px 0 10px; }
-        img { width:210px; height:210px; }
-        .hint { font-size:12px; color:#374151; margin-top:8px; }
-        @media print { .card { border-color:#1D4ED8; } }
+        .place { font-size:18px; font-weight:800; color:#0F172A; margin:5px 0 8px; }
+        img { width:185px; height:185px; }
+        .hint { font-size:11px; color:#374151; margin-top:7px; }
       </style></head>
       <body>
-        <div class="grid">${cardsHtml}</div>
+        ${pagesHtml}
         <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
       </body></html>`);
     w.document.close();
